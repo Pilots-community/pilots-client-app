@@ -81,7 +81,7 @@ After deploying both frontend and backend, configure the connection:
 
 ### View Backyour-backend-app
 ```powershell
-curl https://azappkyixgy3com6f6.azurewebsites.net/serviceInstances
+curl .../serviceInstances
 ```
 
 ## 🛠️ Technology Stack
@@ -113,10 +113,6 @@ DELETE /serviceInstances/:id     Delete instance
 Deploy the frontend and backend separately, then configure `frontend/js/config.js` to connect them.
 
 See individual README files in `/frontend` and `/backend` for detailed deployment instructions.
-
-## 📄 License
-
-MIT
 
 ## 🤝 Contributing
 
