@@ -1,6 +1,7 @@
 # Pilots Client App - Container Weighing Control Center
 
 A full-stack demonstration application for managing VGM (Verified Gross Mass) container weighing workflows, implementing the Service Instance API specification.
+Live demo running (currently) on: https://weighingapp78107.z6.web.core.windows.net/ (frontend) & https://azappkyixgy3com6f6.azurewebsites.net/health (backend)
 
 ## 🏗️ Project Structure
 
