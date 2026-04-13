@@ -1,0 +1,27 @@
+# azure.yaml
+# Azure Developer CLI configuration for deploying the Weighing App Mock Backend
+
+name: weighing-app-mock-backend
+metadata:
+  template: weighing-app-mock-backend@0.0.1-beta
+
+# Services to deploy
+services:
+  api:
+    # Project configuration
+    project: .
+    language: js
+    host: appservice
+    
+    # Build and deployment hooks
+    hooks:
+      # Install dependencies before deployment
+      predeploy:
+        windows:
+          shell: pwsh
+          run: npm install --production
+          continueOnError: false
+        posix:
+          shell: sh
+          run: npm install --production
+          continueOnError: false

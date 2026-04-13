@@ -1,0 +1,1227 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Container Weighing Control Center App</title>
+  <link rel="stylesheet" href="css/styles.css" />
+  <!-- React from CDN (no build step required) -->
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+</head>
+<body>
+  <div id="root"></div>
+
+  <!-- Configuration -->
+  <script src="js/config.js"></script>
+  <!-- Data models and seed data (plain JS) -->
+  <script src="js/models.js"></script>
+  <!-- Mock API service layer (plain JS) -->
+  <script src="js/services.js"></script>
+  <!-- Real backend API client -->
+  <script src="js/backend-api.js"></script>
+  <!-- API wrapper (switches between mock and real) -->
+  <script src="js/api-wrapper.js"></script>
+
+  <!-- ============================================================
+       React Components (JSX, processed by Babel standalone)
+       ============================================================ -->
+  <script type="text/babel">
+    const { useState, useEffect, useCallback } = React;
+
+    // ────────────────────────────────────────────────────────────
+    // Shared Components
+    // ────────────────────────────────────────────────────────────
+
+    /** Colored badge showing instance state */
+    function StateBadge({ state }) {
+      const colors = window.STATE_COLORS[state] || { bg: "#e5e7eb", text: "#374151", border: "#9ca3af" };
+      const label = window.STATE_LABELS[state] || state;
+      return (
+        <span
+          className="state-badge"
+          style={{ backgroundColor: colors.bg, color: colors.text, borderColor: colors.border }}
+        >
+          {label}
+        </span>
+      );
+    }
+
+    /** Visual state progress bar */
+    function StateProgress({ currentState }) {
+      const states = window.STATES;
+      const currentIdx = states.indexOf(currentState);
+      return (
+        <div className="state-progress">
+          {states.map((s, i) => {
+            let cls = "state-step";
+            if (i < currentIdx) cls += " completed";
+            if (i === currentIdx) cls += " active";
+            return (
+              <div key={s} className={cls}>
+                <div className="state-dot" />
+                <div className="state-step-label">{window.STATE_LABELS[s]}</div>
+              </div>
+            );
+          })}
+        </div>
+      );
+    }
+
+    /** Toast notification */
+    function Toast({ message, type, onClose }) {
+      useEffect(() => {
+        const timer = setTimeout(onClose, 3000);
+        return () => clearTimeout(timer);
+      }, [onClose]);
+      return <div className={`toast toast-${type}`}>{message}</div>;
+    }
+
+    /** Loading spinner */
+    function Loading() {
+      return (
+        <div className="loading">
+          <div className="spinner" />
+          Loading...
+        </div>
+      );
+    }
+
+    // ────────────────────────────────────────────────────────────
+    // Modal Wrapper
+    // ────────────────────────────────────────────────────────────
+
+    function Modal({ title, onClose, children, footer }) {
+      return (
+        <div className="modal-overlay" onClick={onClose}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h2>{title}</h2>
+              <button className="modal-close" onClick={onClose}>&times;</button>
+            </div>
+            <div className="modal-body">{children}</div>
+            {footer && <div className="modal-footer">{footer}</div>}
+          </div>
+        </div>
+      );
+    }
+
+    // ────────────────────────────────────────────────────────────
+    // ODRL Service Definition Viewer
+    // ────────────────────────────────────────────────────────────
+
+    function ODRLViewerModal({ onClose }) {
+      // Sample ODRL policy for Container Weighing Service
+      const odrlPolicy = {
+        "@context": "http://www.w3.org/ns/odrl.jsonld",
+        "@type": "Offer",
+        "uid": "https://certi-weight.be/policy/container-weighing-001",
+        "profile": "http://example.com/odrl:profile:01",
+        "permission": [
+          {
+            "target": "https://certi-weight.be/services/container-weighing",
+            "action": "use",
+            "assigner": "https://certi-weight.be",
+            "assignee": "https://van-moer.be",
+            "constraint": [
+              {
+                "leftOperand": "purpose",
+                "operator": "eq",
+                "rightOperand": "VGM (Verified Gross Mass) Compliance"
+              },
+              {
+                "leftOperand": "containerType",
+                "operator": "isAnyOf",
+                "rightOperand": ["20ft", "40ft", "40ft HC"]
+              }
+            ],
+            "duty": [
+              {
+                "action": "compensate",
+                "constraint": [
+                  {
+                    "leftOperand": "payAmount",
+                    "operator": "eq",
+                    "rightOperand": "45.00",
+                    "unit": "EUR"
+                  }
+                ]
+              },
+              {
+                "action": "inform",
+                "target": "https://certi-weight.be/api/notifications",
+                "constraint": [
+                  {
+                    "leftOperand": "delayPeriod",
+                    "operator": "lteq",
+                    "rightOperand": "PT24H"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "prohibition": [
+          {
+            "target": "https://certi-weight.be/services/container-weighing",
+            "action": "distribute",
+            "assigner": "https://certi-weight.be"
+          },
+          {
+            "target": "certificate-data",
+            "action": "commercialize"
+          }
+        ]
+      };
+
+      return (
+        <Modal
+          title="📜 ODRL Service Definition"
+          onClose={onClose}
+          footer={
+            <button className="btn btn-primary" onClick={onClose}>Close</button>
+          }
+        >
+          <div style={{ marginBottom: "1rem" }}>
+            <p style={{ fontSize: "0.9rem", color: "#6b7280" }}>
+              This ODRL (Open Digital Rights Language) policy defines the permissions, prohibitions, 
+              and obligations for the Container Weighing service.
+            </p>
+          </div>
+
+          {/* Policy Summary */}
+          <div style={{ marginBottom: "1.5rem", padding: "1rem", background: "#f9fafb", borderRadius: "6px", border: "1px solid #e5e7eb" }}>
+            <h3 style={{ fontSize: "0.95rem", fontWeight: 600, marginBottom: "0.75rem", color: "#111827" }}>
+              Policy Summary
+            </h3>
+            <div style={{ fontSize: "0.85rem", lineHeight: "1.6" }}>
+              <div style={{ marginBottom: "0.5rem" }}>
+                <strong>Service:</strong> Container Weighing (VGM Compliance)
+              </div>
+              <div style={{ marginBottom: "0.5rem" }}>
+                <strong>Provider:</strong> Certi-Weight
+              </div>
+              <div style={{ marginBottom: "0.5rem" }}>
+                <strong>Consumer:</strong> Van Moer
+              </div>
+              <div style={{ marginBottom: "0.5rem" }}>
+                <strong>Price:</strong> €45.00 per weighing
+              </div>
+              <div>
+                <strong>Supported Containers:</strong> 20ft, 40ft, 40ft HC
+              </div>
+            </div>
+          </div>
+
+          {/* Permissions */}
+          <div style={{ marginBottom: "1.5rem" }}>
+            <h3 style={{ fontSize: "0.9rem", fontWeight: 600, marginBottom: "0.5rem", color: "#059669" }}>
+              ✓ Permissions
+            </h3>
+            <ul style={{ fontSize: "0.85rem", color: "#374151", marginLeft: "1.5rem", lineHeight: "1.6" }}>
+              <li>Use container weighing service for VGM compliance</li>
+              <li>Request weighing for 20ft, 40ft, and 40ft HC containers</li>
+              <li>Receive verified weight certificates</li>
+            </ul>
+          </div>
+
+          {/* Duties/Obligations */}
+          <div style={{ marginBottom: "1.5rem" }}>
+            <h3 style={{ fontSize: "0.9rem", fontWeight: 600, marginBottom: "0.5rem", color: "#2563eb" }}>
+              ⚖️ Obligations
+            </h3>
+            <ul style={{ fontSize: "0.85rem", color: "#374151", marginLeft: "1.5rem", lineHeight: "1.6" }}>
+              <li>Pay €45.00 per container weighing service</li>
+              <li>Inform provider within 24 hours of service request</li>
+              <li>Provide accurate container information</li>
+            </ul>
+          </div>
+
+          {/* Prohibitions */}
+          <div style={{ marginBottom: "1.5rem" }}>
+            <h3 style={{ fontSize: "0.9rem", fontWeight: 600, marginBottom: "0.5rem", color: "#dc2626" }}>
+              ✗ Prohibitions
+            </h3>
+            <ul style={{ fontSize: "0.85rem", color: "#374151", marginLeft: "1.5rem", lineHeight: "1.6" }}>
+              <li>Distribute or resell the weighing service</li>
+              <li>Commercialize certificate data</li>
+              <li>Share certificates with unauthorized parties</li>
+            </ul>
+          </div>
+
+          {/* Raw ODRL JSON */}
+          <details style={{ marginTop: "1.5rem" }}>
+            <summary style={{ cursor: "pointer", fontSize: "0.85rem", fontWeight: 600, color: "#6b7280", marginBottom: "0.5rem" }}>
+              View Raw ODRL Policy (JSON)
+            </summary>
+            <pre style={{
+              background: "#1f2937",
+              color: "#f9fafb",
+              padding: "1rem",
+              borderRadius: "6px",
+              fontSize: "0.75rem",
+              overflow: "auto",
+              maxHeight: "300px",
+              lineHeight: "1.5"
+            }}>
+              {JSON.stringify(odrlPolicy, null, 2)}
+            </pre>
+          </details>
+        </Modal>
+      );
+    }
+
+    // ────────────────────────────────────────────────────────────
+    // Create Instance Modal
+    // ────────────────────────────────────────────────────────────
+
+    function CreateInstanceModal({ offeringId, onClose, onCreated, showToast }) {
+      const [containernr, setContainernr] = useState("");
+      const [bookingnr, setBookingnr] = useState("");
+      const [liner, setLiner] = useState("Maersk Line");
+      const [location, setLocation] = useState("Port of Antwerp");
+      const [transportbedrijf, setTransportbedrijf] = useState("");
+      const [customerReference, setCustomerReference] = useState("");
+      const [shipperContact, setShipperContact] = useState("");
+      const [submitting, setSubmitting] = useState(false);
+
+      const handleSubmit = async (e) => {
+        e.preventDefault();
+        if (!containernr.trim()) {
+          showToast("Container number is required", "error");
+          return;
+        }
+        if (!bookingnr.trim()) {
+          showToast("Booking number is required", "error");
+          return;
+        }
+        setSubmitting(true);
+        try {
+          await window.API.createInstance(offeringId, {
+            containernr: containernr.trim(),
+            bookingnr: bookingnr.trim(),
+            liner: liner.trim(),
+            location: location.trim(),
+            transportbedrijf: transportbedrijf.trim(),
+            customerReference: customerReference.trim(),
+            shipperContact: shipperContact.trim() || "Unknown",
+            shipperCompany: "Van Moer Logistics",
+            shipperAddress: "Havenstraat 123, 2030 Antwerp, Belgium"
+          });
+          showToast("Order created successfully!", "success");
+          onCreated();
+        } catch (err) {
+          showToast("Failed to create order: " + err.message, "error");
+        }
+        setSubmitting(false);
+      };
+
+      return (
+        <Modal
+          title="Create New Order (OrderCreated)"
+          onClose={onClose}
+          footer={
+            <>
+              <button className="btn btn-secondary" onClick={onClose}>Cancel</button>
+              <button className="btn btn-primary" onClick={handleSubmit} disabled={submitting}>
+                {submitting ? "Creating..." : "Create Order"}
+              </button>
+            </>
+          }
+        >
+          <form onSubmit={handleSubmit}>
+            <div className="form-group">
+              <label>Container Number * (containernr)</label>
+              <input
+                type="text"
+                value={containernr}
+                onChange={(e) => setContainernr(e.target.value)}
+                placeholder="e.g. MSKU1234567"
+                required
+              />
+              <p className="form-hint">ISO 6346 container number</p>
+            </div>
+            <div className="form-group">
+              <label>Booking Number * (bookingnr)</label>
+              <input
+                type="text"
+                value={bookingnr}
+                onChange={(e) => setBookingnr(e.target.value)}
+                placeholder="e.g. BK2026-001"
+                required
+              />
+            </div>
+            <div className="form-group">
+              <label>Liner</label>
+              <select value={liner} onChange={(e) => setLiner(e.target.value)}>
+                <option>Maersk Line</option>
+                <option>MSC</option>
+                <option>CMA CGM</option>
+                <option>Hapag-Lloyd</option>
+                <option>COSCO</option>
+              </select>
+            </div>
+            <div className="form-group">
+              <label>Location</label>
+              <select value={location} onChange={(e) => setLocation(e.target.value)}>
+                <option>Port of Antwerp</option>
+                <option>Port of Rotterdam</option>
+                <option>Port of Hamburg</option>
+                <option>Port of Zeebrugge</option>
+              </select>
+            </div>
+            <div className="form-group">
+              <label>Transport Company (transportbedrijf)</label>
+              <input
+                type="text"
+                value={transportbedrijf}
+                onChange={(e) => setTransportbedrijf(e.target.value)}
+                placeholder="e.g. Van Moer Transport"
+              />
+            </div>
+            <div className="form-group">
+              <label>Customer Reference</label>
+              <input
+                type="text"
+                value={customerReference}
+                onChange={(e) => setCustomerReference(e.target.value)}
+                placeholder="e.g. CUST-REF-001"
+              />
+            </div>
+            <div className="form-group">
+              <label>Shipper Contact</label>
+              <input
+                type="text"
+                value={shipperContact}
+                onChange={(e) => setShipperContact(e.target.value)}
+                placeholder="e.g. John Doe"
+              />
+            </div>
+          </form>
+        </Modal>
+      );
+    }
+
+    // ────────────────────────────────────────────────────────────
+    // Instance Detail Modal
+    // ────────────────────────────────────────────────────────────
+
+    function InstanceDetailModal({ instanceId, onClose, onUpdated, showToast }) {
+      const [instance, setInstance] = useState(null);
+      const [loading, setLoading] = useState(true);
+
+      // Editable fields
+      const [newState, setNewState] = useState("");
+      const [seal, setSeal] = useState("");
+      const [weight, setWeight] = useState("");
+      const [driverName, setDriverName] = useState("");
+      const [licensePlate, setLicensePlate] = useState("");
+      const [saving, setSaving] = useState(false);
+
+      const loadInstance = useCallback(async () => {
+        setLoading(true);
+        try {
+          const data = await window.API.getInstance(instanceId);
+          setInstance(data);
+          setSeal(data.seal || "");
+          setWeight(data.weight || "");
+          setDriverName(data.truckDriver?.name || "");
+          setLicensePlate(data.truckDriver?.licensePlate || "");
+          const next = window.API.getNextStates(data.state);
+          setNewState(next.length > 0 ? next[0] : "");
+        } catch (err) {
+          showToast("Failed to load instance", "error");
+        }
+        setLoading(false);
+      }, [instanceId]);
+
+      useEffect(() => { loadInstance(); }, [loadInstance]);
+
+      const handleUpdateState = async () => {
+        if (!newState) return;
+        setSaving(true);
+        try {
+          const updates = { state: newState };
+          
+          // TruckerAnnounced state transition
+          if (newState === "trucker_announced") {
+            if (driverName && licensePlate) {
+              updates.truckDriver = {
+                "@id": `https://transport.be/drivers/${Date.now()}`,
+                name: driverName.trim(),
+                licensePlate: licensePlate.trim(),
+                company: instance.transportbedrijf || "Unknown"
+              };
+            }
+            updates.driverName = driverName.trim();
+            updates.licensePlate = licensePlate.trim();
+          }
+          
+          // MeasurementCreated state transition
+          if (newState === "measurement_created" && seal) {
+            updates.seal = seal.trim();
+          }
+          
+          // VGMPurchased state transition
+          if (newState === "vgm_purchased" && weight) {
+            updates.weight = parseFloat(weight);
+          }
+          
+          await window.API.patchInstance(instanceId, updates);
+          showToast("State updated!", "success");
+          onUpdated();
+          loadInstance();
+        } catch (err) {
+          showToast(err.message, "error");
+        }
+        setSaving(false);
+      };
+
+      if (loading) return <Modal title="Instance Details" onClose={onClose}><Loading /></Modal>;
+      if (!instance) return null;
+
+      const nextStates = window.API.getNextStates(instance.state);
+      const isFinalState = nextStates.length === 0;
+
+      return (
+        <Modal title={`Instance: ${instance.containernr}`} onClose={onClose}>
+          {/* State progress visualization */}
+          <StateProgress currentState={instance.state} />
+
+          {/* JSON-LD Context Badge */}
+          <div style={{ marginTop: "1rem", padding: "0.5rem", background: "#f0f9ff", border: "1px solid #bae6fd", borderRadius: "4px", fontSize: "0.75rem", color: "#0369a1" }}>
+            <strong>@context:</strong> {instance["@context"] || "https://example.com/context/vgm.jsonld"}
+          </div>
+
+          {/* Instance details - JSON-LD message fields */}
+          <div className="detail-grid" style={{ marginTop: "1.5rem" }}>
+            <div className="detail-field">
+              <div className="detail-label">Instance ID</div>
+              <div className="detail-value">{instance.id}</div>
+            </div>
+            <div className="detail-field">
+              <div className="detail-label">Current State</div>
+              <div className="detail-value"><StateBadge state={instance.state} /></div>
+            </div>
+
+            {/* OrderCreated fields */}
+            <div className="detail-field">
+              <div className="detail-label">Container Number (containernr)</div>
+              <div className="detail-value" style={{ fontWeight: 600 }}>{instance.containernr}</div>
+            </div>
+            <div className="detail-field">
+              <div className="detail-label">Booking Number (bookingnr)</div>
+              <div className="detail-value">{instance.bookingnr}</div>
+            </div>
+            <div className="detail-field">
+              <div className="detail-label">Liner</div>
+              <div className="detail-value">{instance.liner}</div>
+            </div>
+            <div className="detail-field">
+              <div className="detail-label">Location</div>
+              <div className="detail-value">{instance.location}</div>
+            </div>
+            <div className="detail-field">
+              <div className="detail-label">Announcement Date</div>
+              <div className="detail-value">{instance.announcementDate ? new Date(instance.announcementDate).toLocaleString() : "—"}</div>
+            </div>
+            <div className="detail-field">
+              <div className="detail-label">Transport Company (transportbedrijf)</div>
+              <div className="detail-value">{instance.transportbedrijf || <span style={{ color: "#9ca3af", fontStyle: "italic" }}>Not specified</span>}</div>
+            </div>
+            <div className="detail-field">
+              <div className="detail-label">Customer Reference</div>
+              <div className="detail-value">{instance.customerReference || <span style={{ color: "#9ca3af", fontStyle: "italic" }}>Not specified</span>}</div>
+            </div>
+
+            {/* TruckerAnnounced fields */}
+            {instance.truckDriver && (
+              <>
+                <div className="detail-field" style={{ gridColumn: "1 / -1", marginTop: "1rem", padding: "0.75rem", background: "#fefce8", border: "1px solid #fde047", borderRadius: "6px" }}>
+                  <div className="detail-label">🚛 Truck Driver Information (IRI)</div>
+                  <div style={{ marginTop: "0.5rem", fontSize: "0.875rem", lineHeight: "1.6" }}>
+                    <div><strong>IRI:</strong> {instance.truckDriver["@id"] || "—"}</div>
+                    <div><strong>Name:</strong> {instance.truckDriver.name || "—"}</div>
+                    <div><strong>License Plate:</strong> {instance.truckDriver.licensePlate || "—"}</div>
+                    <div><strong>Company:</strong> {instance.truckDriver.company || "—"}</div>
+                  </div>
+                </div>
+                <div className="detail-field">
+                  <div className="detail-label">Announcement Timestamp</div>
+                  <div className="detail-value">
+                    {instance.announcementTimestamp ? new Date(instance.announcementTimestamp).toLocaleString() : <span style={{ color: "#9ca3af", fontStyle: "italic" }}>Not available</span>}
+                  </div>
+                </div>
+              </>
+            )}
+
+            {/* MeasurementCreated fields */}
+            <div className="detail-field">
+              <div className="detail-label">Seal</div>
+              <div className={`detail-value${!instance.seal ? " empty" : ""}`}>
+                {instance.seal || "Not available"}
+              </div>
+            </div>
+            <div className="detail-field">
+              <div className="detail-label">Weighing Timestamp</div>
+              <div className="detail-value">
+                {instance.weighingTimestamp ? new Date(instance.weighingTimestamp).toLocaleString() : <span style={{ color: "#9ca3af", fontStyle: "italic" }}>Not available</span>}
+              </div>
+            </div>
+
+            {/* VGMPurchased fields */}
+            <div className="detail-field">
+              <div className="detail-label">Weight (kg) 🔒</div>
+              <div className={`detail-value${!instance.weight ? " empty" : ""}`} style={{ fontWeight: 600, color: instance.weight ? "#059669" : "#9ca3af" }}>
+                {instance.weight ? `${parseFloat(instance.weight).toLocaleString()} kg` : "Hidden (purchase required)"}
+              </div>
+            </div>
+
+            {/* Shipper information */}
+            {instance.shipper && (
+              <>
+                <div className="detail-field" style={{ gridColumn: "1 / -1", marginTop: "1rem", padding: "0.75rem", background: "#f9fafb", borderRadius: "6px" }}>
+                  <div className="detail-label">Shipper Information (IRI)</div>
+                  <div style={{ marginTop: "0.5rem", fontSize: "0.875rem", lineHeight: "1.6" }}>
+                    <div><strong>IRI:</strong> {instance.shipper["@id"] || "—"}</div>
+                    <div><strong>Contact:</strong> {instance.shipper.contact || "—"}</div>
+                    <div><strong>Company:</strong> {instance.shipper.company || "—"}</div>
+                    <div><strong>Address:</strong> {instance.shipper.address || "—"}</div>
+                  </div>
+                </div>
+              </>
+            )}
+
+            <div className="detail-field">
+              <div className="detail-label">Service Provider</div>
+              <div className="detail-value">{instance.serviceProvider}</div>
+            </div>
+            <div className="detail-field" style={{ gridColumn: "1 / -1" }}>
+              <div className="detail-label">Last Updated</div>
+              <div className="detail-value">{new Date(instance.lastUpdated).toLocaleString()}</div>
+            </div>
+          </div>
+
+          {/* Edit sections */}
+          <hr style={{ margin: "1.5rem 0", border: "none", borderTop: "1px solid #e5e7eb" }} />
+
+          {/* Update State */}
+          <div className="form-group">
+            <label>Advance State</label>
+            {isFinalState ? (
+              <p className="form-hint" style={{ fontStyle: "italic" }}>This instance is in its final state.</p>
+            ) : (
+              <>
+                <div style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
+                  <select value={newState} onChange={(e) => setNewState(e.target.value)} style={{ flex: 1 }}>
+                    {nextStates.map((s) => (
+                      <option key={s} value={s}>{window.STATE_LABELS[s]}</option>
+                    ))}
+                  </select>
+                  <button className="btn btn-primary btn-sm" onClick={handleUpdateState} disabled={saving}>
+                    Advance
+                  </button>
+                </div>
+                {newState === "trucker_announced" && (
+                  <>
+                    <div style={{ marginTop: "0.75rem" }}>
+                      <label style={{ fontSize: "0.85rem" }}>Driver Name (for TruckerAnnounced)</label>
+                      <input
+                        type="text"
+                        value={driverName}
+                        onChange={(e) => setDriverName(e.target.value)}
+                        placeholder="e.g. Marc Vermeulen"
+                        style={{ marginTop: "0.25rem" }}
+                      />
+                    </div>
+                    <div style={{ marginTop: "0.5rem" }}>
+                      <label style={{ fontSize: "0.85rem" }}>License Plate</label>
+                      <input
+                        type="text"
+                        value={licensePlate}
+                        onChange={(e) => setLicensePlate(e.target.value)}
+                        placeholder="e.g. 1-ABC-123"
+                        style={{ marginTop: "0.25rem" }}
+                      />
+                    </div>
+                  </>
+                )}
+                {newState === "measurement_created" && (
+                  <div style={{ marginTop: "0.75rem" }}>
+                    <label style={{ fontSize: "0.85rem" }}>Seal (required for MeasurementCreated)</label>
+                    <input
+                      type="text"
+                      value={seal}
+                      onChange={(e) => setSeal(e.target.value)}
+                      placeholder="e.g. SEAL-123456"
+                      style={{ marginTop: "0.25rem" }}
+                    />
+                  </div>
+                )}
+                {newState === "vgm_purchased" && (
+                  <div style={{ marginTop: "0.75rem" }}>
+                    <label style={{ fontSize: "0.85rem" }}>Weight (kg) - visible after purchase</label>
+                    <input
+                      type="number"
+                      step="0.1"
+                      value={weight}
+                      onChange={(e) => setWeight(e.target.value)}
+                      placeholder="e.g. 28450.5"
+                      style={{ marginTop: "0.25rem" }}
+                    />
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        </Modal>
+      );
+    }
+
+    // ────────────────────────────────────────────────────────────
+    // Quick Update Modals (for inline table actions)
+    // ────────────────────────────────────────────────────────────
+
+    function UpdateStateModal({ instance, onClose, onUpdated, showToast }) {
+      const nextStates = window.API.getNextStates(instance.state);
+      const [newState, setNewState] = useState(nextStates[0] || "");
+      const [saving, setSaving] = useState(false);
+
+      const handleSave = async () => {
+        setSaving(true);
+        try {
+          await window.API.patchInstance(instance.id, { state: newState });
+          showToast("State updated!", "success");
+          onUpdated();
+          onClose();
+        } catch (err) {
+          showToast(err.message, "error");
+        }
+        setSaving(false);
+      };
+
+      if (nextStates.length === 0) {
+        return (
+          <Modal title="Update State" onClose={onClose}>
+            <p>This instance is already in its final state.</p>
+          </Modal>
+        );
+      }
+
+      return (
+        <Modal
+          title={`Advance State: ${instance.containernr}`}
+          onClose={onClose}
+          footer={
+            <>
+              <button className="btn btn-secondary" onClick={onClose}>Cancel</button>
+              <button className="btn btn-primary" onClick={handleSave} disabled={saving}>
+                {saving ? "Saving..." : "Update State"}
+              </button>
+            </>
+          }
+        >
+          <p style={{ marginBottom: "1rem" }}>
+            Current state: <StateBadge state={instance.state} />
+          </p>
+          <div className="form-group">
+            <label>Advance to:</label>
+            <select value={newState} onChange={(e) => setNewState(e.target.value)}>
+              {nextStates.map((s) => (
+                <option key={s} value={s}>{window.STATE_LABELS[s]}</option>
+              ))}
+            </select>
+          </div>
+        </Modal>
+      );
+    }
+
+    // ────────────────────────────────────────────────────────────
+    // Page: Service Offerings
+    // ────────────────────────────────────────────────────────────
+
+    function ServiceOfferingsPage({ onSelectOffering }) {
+      const [offerings, setOfferings] = useState([]);
+      const [loading, setLoading] = useState(true);
+      const [showODRL, setShowODRL] = useState(false);
+
+      useEffect(() => {
+        window.API.getOfferings().then((data) => {
+          setOfferings(data);
+          setLoading(false);
+        });
+      }, []);
+
+      if (loading) return <Loading />;
+
+      return (
+        <div className="container">
+          <h2 className="page-title">Container Weighing Process</h2>
+          <p className="page-subtitle">Browse available service offerings and view their instances.</p>
+
+          {offerings.map((offering) => (
+            <div key={offering.id} className="card">
+              <div className="card-header">
+                <span className="card-title">{offering.name}</span>
+                <div className="btn-group">
+                  <button
+                    className="btn btn-secondary"
+                    onClick={() => setShowODRL(true)}
+                  >
+                    📜 View Service Definition
+                  </button>
+                  <button
+                    className="btn btn-primary"
+                    onClick={() => onSelectOffering(offering)}
+                  >
+                    View Instances →
+                  </button>
+                </div>
+              </div>
+              <div className="detail-grid">
+                <div className="detail-field">
+                  <div className="detail-label">Consumer</div>
+                  <div className="detail-value">Van Moer</div>
+                </div>
+                <div className="detail-field">
+                  <div className="detail-label">Provider</div>
+                  <div className="detail-value">{offering.provider}</div>
+                </div>
+                <div className="detail-field">
+                  <div className="detail-label">Provider DID</div>
+                  <div className="detail-value" style={{ fontSize: "0.8rem", wordBreak: "break-all" }}>did:web:identityhub.certi-weight.be</div>
+                </div>
+                <div className="detail-field">
+                  <div className="detail-label">Consumer DID</div>
+                  <div className="detail-value" style={{ fontSize: "0.8rem", wordBreak: "break-all" }}>did:web:identityhub.van-moer.be</div>
+                </div>
+                <div className="detail-field">
+                  <div className="detail-label">Offering ID</div>
+                  <div className="detail-value" style={{ fontSize: "0.8rem" }}>f17393de-f6d9-41e5-b239-f7a9db951f0f</div>
+                </div>
+                <div className="detail-field">
+                  <div className="detail-label">Created</div>
+                  <div className="detail-value">{offering.createdAt}</div>
+                </div>
+              </div>
+            </div>
+          ))}
+
+          {/* ODRL Viewer Modal */}
+          {showODRL && <ODRLViewerModal onClose={() => setShowODRL(false)} />}
+        </div>
+      );
+    }
+
+    // ────────────────────────────────────────────────────────────
+    // Page: Service Instances (for a given offering)
+    // ────────────────────────────────────────────────────────────
+
+    function ServiceInstancesPage({ offering, onBack, showToast }) {
+      const [instances, setInstances] = useState([]);
+      const [loading, setLoading] = useState(true);
+
+      // Modal states
+      const [showCreate, setShowCreate] = useState(false);
+      const [detailId, setDetailId] = useState(null);
+      const [updateStateInstance, setUpdateStateInstance] = useState(null);
+
+      const loadInstances = useCallback(async () => {
+        setLoading(true);
+        const data = await window.API.getInstancesByOffering(offering.id);
+        setInstances(data);
+        setLoading(false);
+      }, [offering.id]);
+
+      useEffect(() => { loadInstances(); }, [loadInstances]);
+
+      const handleRefresh = () => { loadInstances(); };
+
+      return (
+        <div className="container">
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1rem", flexWrap: "wrap", gap: "0.5rem" }}>
+            <div>
+              <h2 className="page-title" style={{ marginBottom: "0.25rem" }}>
+                {offering.name}
+              </h2>
+              <p className="page-subtitle" style={{ marginBottom: 0 }}>
+                Provider: {offering.provider} &middot; ID: {offering.id}
+              </p>
+            </div>
+            <button className="btn btn-success" onClick={() => setShowCreate(true)}>
+              + Book New Instance
+            </button>
+          </div>
+
+          {loading ? (
+            <Loading />
+          ) : instances.length === 0 ? (
+            <div className="card" style={{ textAlign: "center", padding: "3rem" }}>
+              <p style={{ color: "#6b7280", marginBottom: "1rem" }}>No service instances yet.</p>
+              <button className="btn btn-primary" onClick={() => setShowCreate(true)}>
+                Book Your First Instance
+              </button>
+            </div>
+          ) : (
+            <div className="card" style={{ padding: "0" }}>
+              <div className="table-wrapper">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>State</th>
+                      <th>Container</th>
+                      <th>Booking</th>
+                      <th>Liner</th>
+                      <th>Location</th>
+                      <th>Trucker</th>
+                      <th>Weight (kg)</th>
+                      <th>Last Updated</th>
+                      <th>Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {instances.map((inst) => (
+                      <tr key={inst.id}>
+                        <td><StateBadge state={inst.state} /></td>
+                        <td style={{ fontWeight: 600 }}>{inst.containernr}</td>
+                        <td style={{ fontSize: "0.85rem" }}>{inst.bookingnr}</td>
+                        <td>{inst.liner}</td>
+                        <td style={{ fontSize: "0.85rem" }}>{inst.location}</td>
+                        <td style={{ fontSize: "0.85rem" }}>
+                          {inst.truckDriver ? (
+                            <div title={`${inst.truckDriver.name} - ${inst.truckDriver.licensePlate}`}>
+                              🚛 {inst.truckDriver.name}
+                            </div>
+                          ) : inst.transportbedrijf ? (
+                            <span style={{ color: "#6b7280" }}>{inst.transportbedrijf}</span>
+                          ) : (
+                            <span style={{ color: "#9ca3af", fontStyle: "italic" }}>—</span>
+                          )}
+                        </td>
+                        <td style={{ fontWeight: 600, color: inst.weight ? "#059669" : "#9ca3af" }}>
+                          {inst.weight ? `${parseFloat(inst.weight).toLocaleString()} kg` : <span style={{ fontStyle: "italic" }}>—</span>}
+                        </td>
+                        <td style={{ fontSize: "0.85rem", color: "#6b7280" }}>
+                          {new Date(inst.lastUpdated).toLocaleString()}
+                        </td>
+                        <td>
+                          <div className="actions">
+                            <button
+                              className="btn btn-secondary btn-sm"
+                              onClick={() => setDetailId(inst.id)}
+                              title="View details"
+                            >
+                              Details
+                            </button>
+                            <button
+                              className="btn btn-secondary btn-sm"
+                              onClick={() => setUpdateStateInstance(inst)}
+                              title="Advance state"
+                            >
+                              Advance
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {/* ---- Modals ---- */}
+          {showCreate && (
+            <CreateInstanceModal
+              offeringId={offering.id}
+              onClose={() => setShowCreate(false)}
+              onCreated={() => { setShowCreate(false); handleRefresh(); }}
+              showToast={showToast}
+            />
+          )}
+          {detailId && (
+            <InstanceDetailModal
+              instanceId={detailId}
+              onClose={() => setDetailId(null)}
+              onUpdated={handleRefresh}
+              showToast={showToast}
+            />
+          )}
+          {updateStateInstance && (
+            <UpdateStateModal
+              instance={updateStateInstance}
+              onClose={() => setUpdateStateInstance(null)}
+              onUpdated={handleRefresh}
+              showToast={showToast}
+            />
+          )}
+        </div>
+      );
+    }
+
+    // ────────────────────────────────────────────────────────────
+    // Settings Modal
+    // ────────────────────────────────────────────────────────────
+
+    function SettingsModal({ onClose, showToast }) {
+      const [backendUrl, setBackendUrl] = useState(window.AppConfig.apiBaseUrl);
+      const [authToken, setAuthToken] = useState(window.AppConfig.auth.getToken() || '');
+      const [demoMode, setDemoMode] = useState(window.API.isDemoMode());
+      const [saving, setSaving] = useState(false);
+
+      const handleSave = () => {
+        setSaving(true);
+        try {
+          // Update configuration
+          window.AppConfig.apiBaseUrl = backendUrl;
+          if (authToken.trim()) {
+            window.AppConfig.auth.setToken(authToken.trim());
+          }
+          window.API.setDemoMode(demoMode);
+          
+          showToast(`Settings saved! Mode: ${demoMode ? 'Demo' : 'Production'}`, "success");
+          onClose();
+        } catch (err) {
+          showToast("Failed to save settings: " + err.message, "error");
+        }
+        setSaving(false);
+      };
+
+      return (
+        <div className="modal-backdrop">
+          <div className="modal" style={{ maxWidth: "600px" }}>
+            <div className="modal-header">
+              <h2>⚙️ Settings</h2>
+              <button onClick={onClose} className="close-btn">✕</button>
+            </div>
+            <div className="modal-body" style={{ display: "flex", flexDirection: "column", gap: "1.5rem" }}>
+              
+              {/* Mode Toggle */}
+              <div>
+                <label style={{ display: "block", fontWeight: 600, marginBottom: "0.5rem", fontSize: "0.95rem" }}>
+                  Operation Mode
+                </label>
+                <div style={{ display: "flex", alignItems: "center", gap: "1rem", padding: "1rem", backgroundColor: "#f9fafb", borderRadius: "8px", border: "1px solid #e5e7eb" }}>
+                  <label style={{ display: "flex", alignItems: "center", cursor: "pointer", flex: 1 }}>
+                    <input
+                      type="radio"
+                      checked={demoMode}
+                      onChange={() => setDemoMode(true)}
+                      style={{ marginRight: "0.5rem" }}
+                    />
+                    <div>
+                      <div style={{ fontWeight: 600 }}>🎮 Demo Mode</div>
+                      <div style={{ fontSize: "0.85rem", color: "#6b7280" }}>Use mock data (5 seed instances)</div>
+                    </div>
+                  </label>
+                  <label style={{ display: "flex", alignItems: "center", cursor: "pointer", flex: 1 }}>
+                    <input
+                      type="radio"
+                      checked={!demoMode}
+                      onChange={() => setDemoMode(false)}
+                      style={{ marginRight: "0.5rem" }}
+                    />
+                    <div>
+                      <div style={{ fontWeight: 600 }}>🚀 Production Mode</div>
+                      <div style={{ fontSize: "0.85rem", color: "#6b7280" }}>Connect to real backend</div>
+                    </div>
+                  </label>
+                </div>
+              </div>
+
+              {/* Backend URL */}
+              <div style={{ opacity: demoMode ? 0.5 : 1, transition: "opacity 0.2s" }}>
+                <label style={{ display: "block", fontWeight: 600, marginBottom: "0.5rem", fontSize: "0.95rem" }}>
+                  Backend API URL
+                  {demoMode && <span style={{ fontWeight: 400, color: "#6b7280", marginLeft: "0.5rem" }}>(disabled in demo mode)</span>}
+                </label>
+                <input
+                  type="text"
+                  value={backendUrl}
+                  onChange={(e) => setBackendUrl(e.target.value)}
+                  placeholder="https://api.example.com"
+                  disabled={demoMode}
+                  style={{ 
+                    width: "100%", 
+                    padding: "0.75rem", 
+                    border: "1px solid #d1d5db", 
+                    borderRadius: "6px",
+                    fontSize: "0.95rem",
+                    fontFamily: "monospace"
+                  }}
+                />
+              </div>
+
+              {/* Auth Token */}
+              <div style={{ opacity: demoMode ? 0.5 : 1, transition: "opacity 0.2s" }}>
+                <label style={{ display: "block", fontWeight: 600, marginBottom: "0.5rem", fontSize: "0.95rem" }}>
+                  Authentication Token (JWT)
+                  {demoMode && <span style={{ fontWeight: 400, color: "#6b7280", marginLeft: "0.5rem" }}>(disabled in demo mode)</span>}
+                </label>
+                <textarea
+                  value={authToken}
+                  onChange={(e) => setAuthToken(e.target.value)}
+                  placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+                  disabled={demoMode}
+                  rows={3}
+                  style={{ 
+                    width: "100%", 
+                    padding: "0.75rem", 
+                    border: "1px solid #d1d5db", 
+                    borderRadius: "6px",
+                    fontSize: "0.85rem",
+                    fontFamily: "monospace",
+                    resize: "vertical"
+                  }}
+                />
+              </div>
+
+              {/* Info Box */}
+              <div style={{ padding: "1rem", backgroundColor: "#eff6ff", border: "1px solid #bfdbfe", borderRadius: "8px" }}>
+                <div style={{ fontWeight: 600, color: "#1e40af", marginBottom: "0.5rem" }}>ℹ️ Configuration Guide</div>
+                <ul style={{ margin: 0, paddingLeft: "1.5rem", color: "#374151", fontSize: "0.9rem", lineHeight: "1.6" }}>
+                  <li><strong>Demo Mode:</strong> Perfect for testing and presentations with mock data</li>
+                  <li><strong>Production Mode:</strong> Connects to your Java backend via REST API</li>
+                  <li>Backend URL example: <code>https://api.example.com</code></li>
+                  <li>Get JWT token from your authentication system</li>
+                </ul>
+              </div>
+            </div>
+            <div className="modal-footer">
+              <button onClick={onClose} className="btn-secondary">Cancel</button>
+              <button onClick={handleSave} className="btn-primary" disabled={saving}>
+                {saving ? "Saving..." : "Save Settings"}
+              </button>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    // ────────────────────────────────────────────────────────────
+    // App Root
+    // ────────────────────────────────────────────────────────────
+
+    function App() {
+      // Navigation: "offerings" or { page: "instances", offering: {...} }
+      const [nav, setNav] = useState({ page: "offerings" });
+      // Toast notifications
+      const [toast, setToast] = useState(null);
+      // Settings modal
+      const [showSettings, setShowSettings] = useState(false);
+      // Current mode (for display refresh)
+      const [currentMode, setCurrentMode] = useState(window.API.isDemoMode() ? 'demo' : 'production');
+
+      const showToast = useCallback((message, type) => {
+        setToast({ message, type, key: Date.now() });
+      }, []);
+
+      // Refresh mode indicator when settings modal closes
+      const handleSettingsClose = useCallback(() => {
+        setShowSettings(false);
+        setCurrentMode(window.API.isDemoMode() ? 'demo' : 'production');
+      }, []);
+
+      return (
+        <div>
+          {/* Global Header */}
+          <header className="app-header">
+            <div style={{ display: "flex", alignItems: "center", gap: "1rem", flex: 1 }}>
+              <span className="header-icon">⚖️</span>
+              <h1>Container Weighing - Control Center</h1>
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: "1rem" }}>
+              {/* Mode Indicator */}
+              <div style={{ 
+                padding: "0.5rem 1rem", 
+                borderRadius: "6px", 
+                fontSize: "0.85rem", 
+                fontWeight: 600,
+                backgroundColor: currentMode === 'demo' ? "rgba(59, 130, 246, 0.2)" : "rgba(34, 197, 94, 0.2)",
+                color: currentMode === 'demo' ? "#3b82f6" : "#22c55e",
+                border: currentMode === 'demo' ? "1px solid rgba(59, 130, 246, 0.4)" : "1px solid rgba(34, 197, 94, 0.4)"
+              }}>
+                {currentMode === 'demo' ? "🎮 Demo" : "🚀 Production"}
+              </div>
+              {/* Client Info */}
+              <div style={{ border: "1px solid rgba(255,255,255,0.3)", padding: "0.5rem 1rem", borderRadius: "6px", fontSize: "0.9rem", fontWeight: 500 }}>
+                Client: Van Moer
+              </div>
+              {/* Settings Button */}
+              <button 
+                onClick={() => setShowSettings(true)}
+                style={{
+                  padding: "0.5rem 1rem",
+                  borderRadius: "6px",
+                  border: "1px solid rgba(255,255,255,0.3)",
+                  backgroundColor: "rgba(255,255,255,0.1)",
+                  color: "white",
+                  cursor: "pointer",
+                  fontSize: "0.9rem",
+                  fontWeight: 500,
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "0.5rem",
+                  transition: "all 0.2s"
+                }}
+                onMouseOver={(e) => e.currentTarget.style.backgroundColor = "rgba(255,255,255,0.2)"}
+                onMouseOut={(e) => e.currentTarget.style.backgroundColor = "rgba(255,255,255,0.1)"}
+              >
+                ⚙️ Settings
+              </button>
+            </div>
+          </header>
+
+          {/* Breadcrumb Navigation */}
+          <div className="breadcrumb">
+            <button onClick={() => setNav({ page: "offerings" })}>Service Offerings</button>
+            {nav.page === "instances" && (
+              <>
+                <span className="sep">/</span>
+                <span>{nav.offering.name}</span>
+              </>
+            )}
+          </div>
+
+          {/* Page Content */}
+          {nav.page === "offerings" && (
+            <ServiceOfferingsPage
+              onSelectOffering={(offering) => setNav({ page: "instances", offering })}
+            />
+          )}
+          {nav.page === "instances" && (
+            <ServiceInstancesPage
+              offering={nav.offering}
+              onBack={() => setNav({ page: "offerings" })}
+              showToast={showToast}
+            />
+          )}
+
+          {/* Toast Notification */}
+          {toast && (
+            <Toast
+              key={toast.key}
+              message={toast.message}
+              type={toast.type}
+              onClose={() => setToast(null)}
+            />
+          )}
+
+          {/* Settings Modal */}
+          {showSettings && (
+            <SettingsModal
+              onClose={handleSettingsClose}
+              showToast={showToast}
+            />
+          )}
+        </div>
+      );
+    }
+
+    // ── Mount ──
+    const root = ReactDOM.createRoot(document.getElementById("root"));
+    root.render(<App />);
+  </script>
+</body>
+</html>

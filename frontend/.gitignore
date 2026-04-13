@@ -1,0 +1,28 @@
+# Azure deployment credentials (contains subscription ID, resource names)
+.azure-deploy.json
+
+# Node modules (if you later add build tools)
+node_modules/
+
+# Environment files
+.env
+.env.local
+
+# IDE specific files
+.vscode/
+.idea/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+# OS specific files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+
+# Azure Functions local settings (if added later)
+local.settings.json
