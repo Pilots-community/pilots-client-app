@@ -3,8 +3,8 @@
 // ============================================================
 
 window.AppConfig = {
-  // Backend API base URL - UPDATE THIS to point to your deployed backend
-  apiBaseUrl: "https://your-backend-app.azurewebsites.net",
+  // Backend API base URL
+  apiBaseUrl: "http://localhost:8080",
   
   // Authentication
   auth: {
@@ -28,9 +28,9 @@ window.AppConfig = {
     }
   },
   
-  // Service Definition URI for VGM weighing service
-  serviceDefinitionUri: "https://certi-weight.be/services/vgm-weighing/v1",
-  
+  // Service Definition — must match the Flowable process definition key
+  serviceDefinitionUri: "certiweightVGMProcess",
+
   // Demo mode - uses mock data if true
-  demoMode: true // Set to false when connecting to real backend
+  demoMode: false
 };

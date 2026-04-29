@@ -139,9 +139,9 @@ window.BackendApiService = (function () {
   function fromServiceInstance(backendInstance) {
     const params = backendInstance.parameters || {};
     
-    // Extract stakeholder info
+    // Extract stakeholder info — our BPMN uses 'provider' and 'customer' roles
     const provider = backendInstance.stakeholders.find(s => s.role === 'provider');
-    const shipper = backendInstance.stakeholders.find(s => s.role === 'shipper');
+    const shipper = backendInstance.stakeholders.find(s => s.role === 'customer' || s.role === 'shipper');
     const carrier = backendInstance.stakeholders.find(s => s.role === 'carrier');
     
     return {
@@ -343,11 +343,11 @@ window.BackendApiService = (function () {
     },
     
     /**
-     * Get instances filtered by service offering
+     * Get instances filtered by service definition (Flowable process key)
      */
     getInstancesByOffering: async function (offeringId) {
       return this.getInstances({
-        serviceOffering: `https://certi-weight.be/offerings/${offeringId}`
+        serviceDefinition: window.AppConfig.serviceDefinitionUri
       });
     },
     
