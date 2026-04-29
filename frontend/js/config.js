@@ -3,8 +3,8 @@
 // ============================================================
 
 window.AppConfig = {
-  // Backend API base URL
-  apiBaseUrl: "http://localhost:8080",
+  // Backend API base URL — P2 (Shipper / consumer) process service
+  apiBaseUrl: "http://localhost:8081",
   
   // Authentication
   auth: {
@@ -29,7 +29,7 @@ window.AppConfig = {
   },
   
   // Service Definition — must match the Flowable process definition key
-  serviceDefinitionUri: "certiweightVGMProcess",
+  serviceDefinitionUri: "shipperProcess",
 
   // Demo mode - uses mock data if true
   demoMode: false
