@@ -1,0 +1,29 @@
+# Deployment scripts
+deploy.ps1
+redeploy.ps1
+
+# Documentation
+README.md
+BACKEND_INTEGRATION.md
+FRONTEND_BACKEND_INTEGRATION.md
+Service-instances_Documentation.yaml
+
+# Azure deployment config (may contain secrets)
+.azure-deploy.json
+
+# Git
+.git
+.gitignore
+
+# Docker
+Dockerfile
+.dockerignore
+
+# IDE and OS files
+.vscode
+.idea
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
