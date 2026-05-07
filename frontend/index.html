@@ -419,24 +419,46 @@
       const [licensePlate, setLicensePlate] = useState("");
       const [saving, setSaving] = useState(false);
 
-      const loadInstance = useCallback(async () => {
-        setLoading(true);
+      const loadInstance = useCallback(async (silent = false) => {
+        if (!silent) setLoading(true);
         try {
           const data = await window.API.getInstance(instanceId);
           setInstance(data);
-          setSeal(data.seal || "");
-          setWeight(data.weight || "");
-          setDriverName(data.truckDriver?.name || "");
-          setLicensePlate(data.truckDriver?.licensePlate || "");
+          if (!silent) {
+            setSeal(data.seal || "");
+            setWeight(data.weight || "");
+            setDriverName(data.truckDriver?.name || "");
+            setLicensePlate(data.truckDriver?.licensePlate || "");
+          }
           const next = window.API.getNextStates(data.state);
           setNewState(next.length > 0 ? next[0] : "");
         } catch (err) {
-          showToast("Failed to load instance", "error");
+          if (!silent) showToast("Failed to load instance", "error");
         }
-        setLoading(false);
+        if (!silent) setLoading(false);
       }, [instanceId]);
 
       useEffect(() => { loadInstance(); }, [loadInstance]);
+
+      // Poll for external state changes (e.g. script advancing state via EDC)
+      const instanceRef = React.useRef(null);
+      useEffect(() => { instanceRef.current = instance; }, [instance]);
+      useEffect(() => {
+        const finalStates = ["vgm_purchased", "COMPLETED", "CANCELLED"];
+        const id = setInterval(async () => {
+          if (instanceRef.current && finalStates.includes(instanceRef.current.state)) {
+            clearInterval(id);
+            return;
+          }
+          try {
+            const data = await window.API.getInstance(instanceId);
+            setInstance(data);
+            const next = window.API.getNextStates(data.state);
+            setNewState(next.length > 0 ? next[0] : "");
+          } catch (err) {}
+        }, 5000);
+        return () => clearInterval(id);
+      }, [instanceId]);
 
       const handleUpdateState = async () => {
         if (!newState) return;
