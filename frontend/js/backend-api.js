@@ -66,29 +66,20 @@ window.BackendApiService = (function () {
    * Convert frontend instance to backend ServiceInstance schema
    */
   function toServiceInstance(frontendInstance, isCreate = false) {
+    const config = window.AppConfig;
     const stakeholders = [
       {
         role: 'provider',
-        party: 'did:web:identityhub.certi-weight.be',
+        party: config.counterpartyDid,
         displayName: frontendInstance.serviceProvider || 'Certi-Weight'
       }
     ];
-    
-    // Add shipper stakeholder if available
+
     if (frontendInstance.shipper) {
       stakeholders.push({
         role: 'shipper',
-        party: frontendInstance.shipper['@id'] || 'did:web:identityhub.van-moer.be',
+        party: config.ownDid,
         displayName: frontendInstance.shipper.company || 'Van Moer Logistics'
-      });
-    }
-    
-    // Add truck driver as carrier if available
-    if (frontendInstance.truckDriver) {
-      stakeholders.push({
-        role: 'carrier',
-        party: frontendInstance.truckDriver['@id'] || 'unknown',
-        displayName: frontendInstance.truckDriver.name || 'Unknown Driver'
       });
     }
     
@@ -134,61 +125,23 @@ window.BackendApiService = (function () {
   }
   
   /**
-   * Convert backend ServiceInstance to frontend format
+   * Convert backend ServiceInstance to frontend format.
+   * Passes through the parameters map as-is so the UI can display any process generically.
    */
   function fromServiceInstance(backendInstance) {
-    const params = backendInstance.parameters || {};
-    
-    // Extract stakeholder info — our BPMN uses 'provider' and 'customer' roles
-    const provider = backendInstance.stakeholders.find(s => s.role === 'provider');
-    const shipper = backendInstance.stakeholders.find(s => s.role === 'customer' || s.role === 'shipper');
-    const carrier = backendInstance.stakeholders.find(s => s.role === 'carrier');
-    
+    const stakeholders = backendInstance.stakeholders || [];
+    const provider = stakeholders.find(s => s.role === 'provider');
     return {
-      '@context': window.JSONLD_CONTEXT['@context'],
       id: backendInstance.id,
       serviceOfferingId: backendInstance.serviceOffering?.split('/').pop() || 'TestID-123',
       state: backendInstance.state,
-      
-      // OrderCreated fields
-      containernr: params.containernr,
-      bookingnr: params.bookingnr,
-      liner: params.liner,
-      location: params.location,
-      announcementDate: params.announcementDate,
-      transportbedrijf: params.transportbedrijf,
-      customerReference: params.customerReference,
-      
-      // Shipper info
-      shipper: shipper ? {
-        '@id': shipper.party,
-        contact: params.shipperContact || 'Unknown',
-        company: shipper.displayName,
-        address: params.shipperAddress || 'Unknown'
-      } : null,
-      
-      // TruckerAnnounced fields
-      truckDriver: params.truckDriver || (carrier ? {
-        '@id': carrier.party,
-        name: carrier.displayName,
-        licensePlate: params.licensePlate || 'Unknown',
-        company: params.transportbedrijf || 'Unknown'
-      } : null),
-      announcementTimestamp: params.announcementTimestamp,
-      
-      // MeasurementCreated fields
-      seal: params.seal,
-      weighingTimestamp: params.weighingTimestamp,
-      
-      // VGMPurchased field
-      weight: params.weight,
-      
+      parameters: backendInstance.parameters || {},
+      stakeholders,
+      serviceDefinition: backendInstance.serviceDefinition,
       serviceProvider: provider?.displayName || 'Certi-Weight',
-      lastUpdated: backendInstance.updatedAt,
-      
-      // Backend metadata
+      updatedAt: backendInstance.updatedAt,
+      createdAt: backendInstance.createdAt,
       _etag: backendInstance.version,
-      _backendId: backendInstance.id
     };
   }
   
@@ -262,6 +215,9 @@ window.BackendApiService = (function () {
     getInstances: async function (filters = {}) {
       const queryParams = new URLSearchParams();
       
+      if (filters.serviceDefinition) {
+        queryParams.append('serviceDefinition', filters.serviceDefinition);
+      }
       if (filters.serviceOffering) {
         queryParams.append('serviceOffering', filters.serviceOffering);
       }
@@ -293,39 +249,19 @@ window.BackendApiService = (function () {
     
     /**
      * PATCH /serviceInstances/:id - Partial update
+     * Accepts { state?, parameters?, stakeholders? }
      */
     patchInstance: async function (id, updates) {
-      // ALWAYS fetch current instance first to ensure ETag is cached
       const path = `/serviceInstances/${id}`;
       const current = await apiRequest('GET', path);
-      const currentMapped = fromServiceInstance(current);
-      
-      // Apply updates to current state
-      const updated = { ...currentMapped, ...updates };
-      
-      // Build partial update payload for backend
+
       const patchPayload = {};
-      
-      // Update state if changed
-      if (updates.state) {
-        patchPayload.state = updates.state;
+      if (updates.state !== undefined) patchPayload.state = updates.state;
+      if (updates.parameters) {
+        patchPayload.parameters = { ...(current.parameters || {}), ...updates.parameters };
       }
-      
-      // Update parameters
-      const paramUpdates = {};
-      if (updates.seal) paramUpdates.seal = updates.seal;
-      if (updates.weighingTimestamp) paramUpdates.weighingTimestamp = updates.weighingTimestamp;
-      if (updates.weight !== undefined) paramUpdates.weight = updates.weight;
-      if (updates.truckDriver) paramUpdates.truckDriver = updates.truckDriver;
-      if (updates.announcementTimestamp) paramUpdates.announcementTimestamp = updates.announcementTimestamp;
-      if (updates.driverName) paramUpdates.driverName = updates.driverName;
-      if (updates.licensePlate) paramUpdates.licensePlate = updates.licensePlate;
-      
-      if (Object.keys(paramUpdates).length > 0) {
-        // Merge with existing backend parameters
-        patchPayload.parameters = { ...(current.parameters || {}), ...paramUpdates };
-      }
-      
+      if (updates.stakeholders) patchPayload.stakeholders = updates.stakeholders;
+
       const response = await apiRequest('PATCH', path, patchPayload, true);
       return fromServiceInstance(response);
     },
@@ -352,13 +288,19 @@ window.BackendApiService = (function () {
     },
     
     /**
-     * Helper: Get valid next states for current state
+     * Helper: Get valid next states for current state.
+     * Uses the backend process flow when available; falls back to mock STATES.
      */
     getNextStates: function (currentState) {
-      const STATES = window.STATES;
-      const currentIndex = STATES.indexOf(currentState);
-      if (currentIndex === -1 || currentIndex >= STATES.length - 1) return [];
-      return [STATES[currentIndex + 1]];
+      const flow = window.getProcessFlow();
+      if (flow) {
+        const idx = flow.findIndex(s => s.key === currentState);
+        if (idx >= 0 && idx < flow.length - 1) return [flow[idx + 1].key];
+        return [];
+      }
+      const idx = window.STATES.indexOf(currentState);
+      if (idx === -1 || idx >= window.STATES.length - 1) return [];
+      return [window.STATES[idx + 1]];
     }
   };
 })();

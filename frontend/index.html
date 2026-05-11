@@ -36,35 +36,62 @@
 
     /** Colored badge showing instance state */
     function StateBadge({ state }) {
-      const colors = window.STATE_COLORS[state] || { bg: "#e5e7eb", text: "#374151", border: "#9ca3af" };
-      const label = window.STATE_LABELS[state] || state;
+      const info = window.getStateInfo(state);
       return (
         <span
           className="state-badge"
-          style={{ backgroundColor: colors.bg, color: colors.text, borderColor: colors.border }}
+          style={{ backgroundColor: info.color.bg, color: info.color.text, borderColor: info.color.border }}
         >
-          {label}
+          {info.label}
         </span>
       );
     }
 
-    /** Visual state progress bar */
+    /** Visual state progress bar (detail modal) */
     function StateProgress({ currentState }) {
-      const states = window.STATES;
-      const currentIdx = states.indexOf(currentState);
+      const flow = window.getProcessFlow();
+      const steps = flow || window.STATES.map(function(s) { return { key: s, label: window.STATE_LABELS[s] || s }; });
+      const currentIdx = steps.findIndex(function(s) { return s.key === currentState; });
       return (
         <div className="state-progress">
-          {states.map((s, i) => {
+          {steps.map((s, i) => {
             let cls = "state-step";
             if (i < currentIdx) cls += " completed";
             if (i === currentIdx) cls += " active";
             return (
-              <div key={s} className={cls}>
+              <div key={s.key} className={cls}>
                 <div className="state-dot" />
-                <div className="state-step-label">{window.STATE_LABELS[s]}</div>
+                <div className="state-step-label">{s.label}</div>
               </div>
             );
           })}
+        </div>
+      );
+    }
+
+    /** Compact dot-progress indicator for the list view */
+    function MiniProgress({ currentState }) {
+      const flow = window.getProcessFlow();
+      if (!flow) return null;
+      const currentIdx = flow.findIndex(function(s) { return s.key === currentState; });
+      return (
+        <div style={{ display: 'flex', gap: '3px', marginTop: '5px', alignItems: 'center' }}>
+          {flow.map((step, i) => (
+            <div
+              key={step.key}
+              title={step.label}
+              style={{
+                width: i === currentIdx ? '9px' : '7px',
+                height: i === currentIdx ? '9px' : '7px',
+                borderRadius: '50%',
+                backgroundColor: i < currentIdx ? '#10b981' : i === currentIdx ? '#2563eb' : '#d1d5db',
+                flexShrink: 0,
+              }}
+            />
+          ))}
+          <span style={{ fontSize: '0.7rem', color: '#6b7280', marginLeft: '3px' }}>
+            {currentIdx >= 0 ? currentIdx + 1 : '?'}/{flow.length}
+          </span>
         </div>
       );
     }
@@ -105,6 +132,37 @@
           </div>
         </div>
       );
+    }
+
+    // ────────────────────────────────────────────────────────────
+    // Generic parameter value renderer
+    // ────────────────────────────────────────────────────────────
+
+    function ParamValue({ value }) {
+      if (value === null || value === undefined) {
+        return <span style={{ color: "#9ca3af", fontStyle: "italic" }}>—</span>;
+      }
+      if (typeof value === "object") {
+        return (
+          <div style={{ fontSize: "0.85rem", lineHeight: "1.7" }}>
+            {Object.entries(value).map(([k, v]) => (
+              <div key={k}><strong>{k}:</strong> {String(v)}</div>
+            ))}
+          </div>
+        );
+      }
+      if (typeof value === "number") {
+        return <span>{value.toLocaleString()}</span>;
+      }
+      if (typeof value === "string") {
+        if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(value)) {
+          return <span>{new Date(value).toLocaleString()}</span>;
+        }
+        if (/^https?:\/\//.test(value)) {
+          return <a href={value} target="_blank" rel="noreferrer" style={{ fontSize: "0.85rem", wordBreak: "break-all" }}>{value}</a>;
+        }
+      }
+      return <span>{String(value)}</span>;
     }
 
     // ────────────────────────────────────────────────────────────
@@ -410,13 +468,8 @@
     function InstanceDetailModal({ instanceId, onClose, onUpdated, showToast }) {
       const [instance, setInstance] = useState(null);
       const [loading, setLoading] = useState(true);
-
-      // Editable fields
       const [newState, setNewState] = useState("");
-      const [seal, setSeal] = useState("");
-      const [weight, setWeight] = useState("");
-      const [driverName, setDriverName] = useState("");
-      const [licensePlate, setLicensePlate] = useState("");
+      const [transitionValues, setTransitionValues] = useState({});
       const [saving, setSaving] = useState(false);
 
       const loadInstance = useCallback(async (silent = false) => {
@@ -425,13 +478,10 @@
           const data = await window.API.getInstance(instanceId);
           setInstance(data);
           if (!silent) {
-            setSeal(data.seal || "");
-            setWeight(data.weight || "");
-            setDriverName(data.truckDriver?.name || "");
-            setLicensePlate(data.truckDriver?.licensePlate || "");
+            const next = window.API.getNextStates(data.state);
+            setNewState(next.length > 0 ? next[0] : "");
+            setTransitionValues({});
           }
-          const next = window.API.getNextStates(data.state);
-          setNewState(next.length > 0 ? next[0] : "");
         } catch (err) {
           if (!silent) showToast("Failed to load instance", "error");
         }
@@ -444,12 +494,14 @@
       const instanceRef = React.useRef(null);
       useEffect(() => { instanceRef.current = instance; }, [instance]);
       useEffect(() => {
-        const finalStates = ["vgm_purchased", "COMPLETED", "CANCELLED"];
         const id = setInterval(async () => {
-          if (instanceRef.current && finalStates.includes(instanceRef.current.state)) {
-            clearInterval(id);
-            return;
-          }
+          const cur = instanceRef.current;
+          if (!cur) return;
+          const flow = window.getProcessFlow();
+          const isFinal = flow
+            ? flow[flow.length - 1]?.key === cur.state
+            : window.STATES.indexOf(cur.state) === window.STATES.length - 1;
+          if (isFinal) { clearInterval(id); return; }
           try {
             const data = await window.API.getInstance(instanceId);
             setInstance(data);
@@ -462,35 +514,23 @@
 
       const handleUpdateState = async () => {
         if (!newState) return;
+        const fields = window.getStateTransitionFields(newState);
+        const required = fields.filter(f => f.required);
+        for (const f of required) {
+          if (!transitionValues[f.key]) {
+            showToast(`${f.label} is required`, "error");
+            return;
+          }
+        }
         setSaving(true);
         try {
-          const updates = { state: newState };
-          
-          // TruckerAnnounced state transition
-          if (newState === "trucker_announced") {
-            if (driverName && licensePlate) {
-              updates.truckDriver = {
-                "@id": `https://transport.be/drivers/${Date.now()}`,
-                name: driverName.trim(),
-                licensePlate: licensePlate.trim(),
-                company: instance.transportbedrijf || "Unknown"
-              };
-            }
-            updates.driverName = driverName.trim();
-            updates.licensePlate = licensePlate.trim();
+          const update = { state: newState };
+          if (fields.length > 0) {
+            const params = {};
+            fields.forEach(f => { if (transitionValues[f.key]) params[f.key] = transitionValues[f.key]; });
+            if (Object.keys(params).length > 0) update.parameters = params;
           }
-          
-          // MeasurementCreated state transition
-          if (newState === "measurement_created" && seal) {
-            updates.seal = seal.trim();
-          }
-          
-          // VGMPurchased state transition
-          if (newState === "vgm_purchased" && weight) {
-            updates.weight = parseFloat(weight);
-          }
-          
-          await window.API.patchInstance(instanceId, updates);
+          await window.API.patchInstance(instanceId, update);
           showToast("State updated!", "success");
           onUpdated();
           loadInstance();
@@ -506,129 +546,81 @@
       const nextStates = window.API.getNextStates(instance.state);
       const isFinalState = nextStates.length === 0;
 
+      // Derive a meaningful title from the first configured list column
+      const cols = window.getTableColumns([instance]);
+      const titleVal = cols.length > 0 ? instance.parameters[cols[0].key] : null;
+      const modalTitle = titleVal ? `Instance: ${titleVal}` : `Instance: ${instance.id.slice(0, 8)}…`;
+
+      // Visible parameters: skip hidden keys
+      const visibleParams = Object.entries(instance.parameters)
+        .filter(([k]) => !window.isHiddenParameter(k));
+
       return (
-        <Modal title={`Instance: ${instance.containernr}`} onClose={onClose}>
-          {/* State progress visualization */}
+        <Modal title={modalTitle} onClose={onClose}>
+          {/* State progress */}
           <StateProgress currentState={instance.state} />
 
-          {/* JSON-LD Context Badge */}
+          {/* JSON-LD context badge */}
           <div style={{ marginTop: "1rem", padding: "0.5rem", background: "#f0f9ff", border: "1px solid #bae6fd", borderRadius: "4px", fontSize: "0.75rem", color: "#0369a1" }}>
-            <strong>@context:</strong> {instance["@context"] || "https://example.com/context/vgm.jsonld"}
+            <strong>@context:</strong> https://example.com/context/vgm.jsonld
           </div>
 
-          {/* Instance details - JSON-LD message fields */}
-          <div className="detail-grid" style={{ marginTop: "1.5rem" }}>
+          {/* Metadata row */}
+          <div className="detail-grid" style={{ marginTop: "1.25rem" }}>
             <div className="detail-field">
               <div className="detail-label">Instance ID</div>
-              <div className="detail-value">{instance.id}</div>
+              <div className="detail-value" style={{ fontSize: "0.8rem", fontFamily: "monospace" }}>{instance.id}</div>
             </div>
             <div className="detail-field">
-              <div className="detail-label">Current State</div>
+              <div className="detail-label">State</div>
               <div className="detail-value"><StateBadge state={instance.state} /></div>
             </div>
-
-            {/* OrderCreated fields */}
             <div className="detail-field">
-              <div className="detail-label">Container Number (containernr)</div>
-              <div className="detail-value" style={{ fontWeight: 600 }}>{instance.containernr}</div>
+              <div className="detail-label">Service</div>
+              <div className="detail-value" style={{ fontSize: "0.85rem" }}>{String(instance.serviceDefinition || "")}</div>
             </div>
             <div className="detail-field">
-              <div className="detail-label">Booking Number (bookingnr)</div>
-              <div className="detail-value">{instance.bookingnr}</div>
-            </div>
-            <div className="detail-field">
-              <div className="detail-label">Liner</div>
-              <div className="detail-value">{instance.liner}</div>
-            </div>
-            <div className="detail-field">
-              <div className="detail-label">Location</div>
-              <div className="detail-value">{instance.location}</div>
-            </div>
-            <div className="detail-field">
-              <div className="detail-label">Announcement Date</div>
-              <div className="detail-value">{instance.announcementDate ? new Date(instance.announcementDate).toLocaleString() : "—"}</div>
-            </div>
-            <div className="detail-field">
-              <div className="detail-label">Transport Company (transportbedrijf)</div>
-              <div className="detail-value">{instance.transportbedrijf || <span style={{ color: "#9ca3af", fontStyle: "italic" }}>Not specified</span>}</div>
-            </div>
-            <div className="detail-field">
-              <div className="detail-label">Customer Reference</div>
-              <div className="detail-value">{instance.customerReference || <span style={{ color: "#9ca3af", fontStyle: "italic" }}>Not specified</span>}</div>
-            </div>
-
-            {/* TruckerAnnounced fields */}
-            {instance.truckDriver && (
-              <>
-                <div className="detail-field" style={{ gridColumn: "1 / -1", marginTop: "1rem", padding: "0.75rem", background: "#fefce8", border: "1px solid #fde047", borderRadius: "6px" }}>
-                  <div className="detail-label">🚛 Truck Driver Information (IRI)</div>
-                  <div style={{ marginTop: "0.5rem", fontSize: "0.875rem", lineHeight: "1.6" }}>
-                    <div><strong>IRI:</strong> {instance.truckDriver["@id"] || "—"}</div>
-                    <div><strong>Name:</strong> {instance.truckDriver.name || "—"}</div>
-                    <div><strong>License Plate:</strong> {instance.truckDriver.licensePlate || "—"}</div>
-                    <div><strong>Company:</strong> {instance.truckDriver.company || "—"}</div>
-                  </div>
-                </div>
-                <div className="detail-field">
-                  <div className="detail-label">Announcement Timestamp</div>
-                  <div className="detail-value">
-                    {instance.announcementTimestamp ? new Date(instance.announcementTimestamp).toLocaleString() : <span style={{ color: "#9ca3af", fontStyle: "italic" }}>Not available</span>}
-                  </div>
-                </div>
-              </>
-            )}
-
-            {/* MeasurementCreated fields */}
-            <div className="detail-field">
-              <div className="detail-label">Seal</div>
-              <div className={`detail-value${!instance.seal ? " empty" : ""}`}>
-                {instance.seal || "Not available"}
-              </div>
-            </div>
-            <div className="detail-field">
-              <div className="detail-label">Weighing Timestamp</div>
-              <div className="detail-value">
-                {instance.weighingTimestamp ? new Date(instance.weighingTimestamp).toLocaleString() : <span style={{ color: "#9ca3af", fontStyle: "italic" }}>Not available</span>}
-              </div>
-            </div>
-
-            {/* VGMPurchased fields */}
-            <div className="detail-field">
-              <div className="detail-label">Weight (kg) 🔒</div>
-              <div className={`detail-value${!instance.weight ? " empty" : ""}`} style={{ fontWeight: 600, color: instance.weight ? "#059669" : "#9ca3af" }}>
-                {instance.weight ? `${parseFloat(instance.weight).toLocaleString()} kg` : "Hidden (purchase required)"}
-              </div>
-            </div>
-
-            {/* Shipper information */}
-            {instance.shipper && (
-              <>
-                <div className="detail-field" style={{ gridColumn: "1 / -1", marginTop: "1rem", padding: "0.75rem", background: "#f9fafb", borderRadius: "6px" }}>
-                  <div className="detail-label">Shipper Information (IRI)</div>
-                  <div style={{ marginTop: "0.5rem", fontSize: "0.875rem", lineHeight: "1.6" }}>
-                    <div><strong>IRI:</strong> {instance.shipper["@id"] || "—"}</div>
-                    <div><strong>Contact:</strong> {instance.shipper.contact || "—"}</div>
-                    <div><strong>Company:</strong> {instance.shipper.company || "—"}</div>
-                    <div><strong>Address:</strong> {instance.shipper.address || "—"}</div>
-                  </div>
-                </div>
-              </>
-            )}
-
-            <div className="detail-field">
-              <div className="detail-label">Service Provider</div>
-              <div className="detail-value">{instance.serviceProvider}</div>
-            </div>
-            <div className="detail-field" style={{ gridColumn: "1 / -1" }}>
-              <div className="detail-label">Last Updated</div>
-              <div className="detail-value">{new Date(instance.lastUpdated).toLocaleString()}</div>
+              <div className="detail-label">Updated</div>
+              <div className="detail-value">{instance.updatedAt ? new Date(instance.updatedAt).toLocaleString() : "—"}</div>
             </div>
           </div>
 
-          {/* Edit sections */}
-          <hr style={{ margin: "1.5rem 0", border: "none", borderTop: "1px solid #e5e7eb" }} />
+          {/* Parameters */}
+          {visibleParams.length > 0 && (
+            <>
+              <h4 style={{ margin: "1.25rem 0 0.5rem", fontSize: "0.85rem", textTransform: "uppercase", color: "#6b7280", letterSpacing: "0.05em" }}>Parameters</h4>
+              <div className="detail-grid">
+                {visibleParams.map(([key, value]) => (
+                  <div key={key} className="detail-field"
+                       style={typeof value === "object" && value !== null ? { gridColumn: "1 / -1" } : {}}>
+                    <div className="detail-label">{window.getParameterLabel(key)}</div>
+                    <div className="detail-value"><ParamValue value={value} /></div>
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
 
-          {/* Update State */}
+          {/* Stakeholders */}
+          {instance.stakeholders.length > 0 && (
+            <>
+              <h4 style={{ margin: "1.25rem 0 0.5rem", fontSize: "0.85rem", textTransform: "uppercase", color: "#6b7280", letterSpacing: "0.05em" }}>Stakeholders</h4>
+              <div style={{ display: "flex", flexDirection: "column", gap: "0.4rem" }}>
+                {instance.stakeholders.map((s, i) => (
+                  <div key={i} style={{ display: "flex", gap: "0.75rem", alignItems: "flex-start", fontSize: "0.875rem" }}>
+                    <span style={{ minWidth: "90px", fontWeight: 600, color: "#374151", textTransform: "capitalize", paddingTop: "1px" }}>{s.role}</span>
+                    <div>
+                      {s.displayName && <div style={{ color: "#111827" }}>{s.displayName}</div>}
+                      <div style={{ color: "#6b7280", fontSize: "0.75rem", fontFamily: "monospace" }}>{s.party}</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
+
+          {/* Advance State */}
+          <hr style={{ margin: "1.5rem 0", border: "none", borderTop: "1px solid #e5e7eb" }} />
           <div className="form-group">
             <label>Advance State</label>
             {isFinalState ? (
@@ -636,64 +628,27 @@
             ) : (
               <>
                 <div style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
-                  <select value={newState} onChange={(e) => setNewState(e.target.value)} style={{ flex: 1 }}>
+                  <select value={newState} onChange={(e) => { setNewState(e.target.value); setTransitionValues({}); }} style={{ flex: 1 }}>
                     {nextStates.map((s) => (
-                      <option key={s} value={s}>{window.STATE_LABELS[s]}</option>
+                      <option key={s} value={s}>{window.getStateInfo(s).label}</option>
                     ))}
                   </select>
                   <button className="btn btn-primary btn-sm" onClick={handleUpdateState} disabled={saving}>
-                    Advance
+                    {saving ? "Saving…" : "Advance"}
                   </button>
                 </div>
-                {newState === "trucker_announced" && (
-                  <>
-                    <div style={{ marginTop: "0.75rem" }}>
-                      <label style={{ fontSize: "0.85rem" }}>Driver Name (for TruckerAnnounced)</label>
-                      <input
-                        type="text"
-                        value={driverName}
-                        onChange={(e) => setDriverName(e.target.value)}
-                        placeholder="e.g. Marc Vermeulen"
-                        style={{ marginTop: "0.25rem" }}
-                      />
-                    </div>
-                    <div style={{ marginTop: "0.5rem" }}>
-                      <label style={{ fontSize: "0.85rem" }}>License Plate</label>
-                      <input
-                        type="text"
-                        value={licensePlate}
-                        onChange={(e) => setLicensePlate(e.target.value)}
-                        placeholder="e.g. 1-ABC-123"
-                        style={{ marginTop: "0.25rem" }}
-                      />
-                    </div>
-                  </>
-                )}
-                {newState === "measurement_created" && (
-                  <div style={{ marginTop: "0.75rem" }}>
-                    <label style={{ fontSize: "0.85rem" }}>Seal (required for MeasurementCreated)</label>
+                {window.getStateTransitionFields(newState).map(f => (
+                  <div key={f.key} style={{ marginTop: "0.6rem" }}>
+                    <label style={{ fontSize: "0.85rem" }}>{f.label}{f.required ? " *" : ""}</label>
                     <input
-                      type="text"
-                      value={seal}
-                      onChange={(e) => setSeal(e.target.value)}
-                      placeholder="e.g. SEAL-123456"
+                      type={f.type || "text"}
+                      value={transitionValues[f.key] || ""}
+                      onChange={(e) => setTransitionValues(prev => ({ ...prev, [f.key]: e.target.value }))}
+                      placeholder={f.placeholder || ""}
                       style={{ marginTop: "0.25rem" }}
                     />
                   </div>
-                )}
-                {newState === "vgm_purchased" && (
-                  <div style={{ marginTop: "0.75rem" }}>
-                    <label style={{ fontSize: "0.85rem" }}>Weight (kg) - visible after purchase</label>
-                    <input
-                      type="number"
-                      step="0.1"
-                      value={weight}
-                      onChange={(e) => setWeight(e.target.value)}
-                      placeholder="e.g. 28450.5"
-                      style={{ marginTop: "0.25rem" }}
-                    />
-                  </div>
-                )}
+                ))}
               </>
             )}
           </div>
@@ -731,15 +686,19 @@
         );
       }
 
+      const cols = window.getTableColumns([instance]);
+      const titleVal = cols.length > 0 ? instance.parameters[cols[0].key] : null;
+      const modalTitle = `Advance: ${titleVal || instance.id.slice(0, 8) + "…"}`;
+
       return (
         <Modal
-          title={`Advance State: ${instance.containernr}`}
+          title={modalTitle}
           onClose={onClose}
           footer={
             <>
               <button className="btn btn-secondary" onClick={onClose}>Cancel</button>
               <button className="btn btn-primary" onClick={handleSave} disabled={saving}>
-                {saving ? "Saving..." : "Update State"}
+                {saving ? "Saving…" : "Update State"}
               </button>
             </>
           }
@@ -751,7 +710,7 @@
             <label>Advance to:</label>
             <select value={newState} onChange={(e) => setNewState(e.target.value)}>
               {nextStates.map((s) => (
-                <option key={s} value={s}>{window.STATE_LABELS[s]}</option>
+                <option key={s} value={s}>{window.getStateInfo(s).label}</option>
               ))}
             </select>
           </div>
@@ -851,12 +810,30 @@
 
       const loadInstances = useCallback(async () => {
         setLoading(true);
-        const data = await window.API.getInstancesByOffering(offering.id);
-        setInstances(data);
+        try {
+          const data = await window.API.getInstancesByOffering(offering.id);
+          setInstances(data);
+        } catch (err) {
+          showToast("Failed to load instances: " + err.message, "error");
+        }
         setLoading(false);
+      }, [offering.id, showToast]);
+
+      // Silent background refresh — no loading spinner, no flicker
+      const silentRefresh = useCallback(async () => {
+        try {
+          const data = await window.API.getInstancesByOffering(offering.id);
+          setInstances(data);
+        } catch (err) {}
       }, [offering.id]);
 
       useEffect(() => { loadInstances(); }, [loadInstances]);
+
+      // Auto-refresh every 5 seconds while the page is open
+      useEffect(() => {
+        const id = setInterval(silentRefresh, 5000);
+        return () => clearInterval(id);
+      }, [silentRefresh]);
 
       const handleRefresh = () => { loadInstances(); };
 
@@ -871,9 +848,11 @@
                 Provider: {offering.provider} &middot; ID: {offering.id}
               </p>
             </div>
-            <button className="btn btn-success" onClick={() => setShowCreate(true)}>
-              + Book New Instance
-            </button>
+            {window.AppConfig.allowBooking !== false && (
+              <button className="btn btn-success" onClick={() => setShowCreate(true)}>
+                + Book New Instance
+              </button>
+            )}
           </div>
 
           {loading ? (
@@ -881,77 +860,67 @@
           ) : instances.length === 0 ? (
             <div className="card" style={{ textAlign: "center", padding: "3rem" }}>
               <p style={{ color: "#6b7280", marginBottom: "1rem" }}>No service instances yet.</p>
-              <button className="btn btn-primary" onClick={() => setShowCreate(true)}>
-                Book Your First Instance
-              </button>
+              {window.AppConfig.allowBooking !== false && (
+                <button className="btn btn-primary" onClick={() => setShowCreate(true)}>
+                  Book Your First Instance
+                </button>
+              )}
             </div>
-          ) : (
-            <div className="card" style={{ padding: "0" }}>
-              <div className="table-wrapper">
-                <table>
-                  <thead>
-                    <tr>
-                      <th>State</th>
-                      <th>Container</th>
-                      <th>Booking</th>
-                      <th>Liner</th>
-                      <th>Location</th>
-                      <th>Trucker</th>
-                      <th>Weight (kg)</th>
-                      <th>Last Updated</th>
-                      <th>Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {instances.map((inst) => (
-                      <tr key={inst.id}>
-                        <td><StateBadge state={inst.state} /></td>
-                        <td style={{ fontWeight: 600 }}>{inst.containernr}</td>
-                        <td style={{ fontSize: "0.85rem" }}>{inst.bookingnr}</td>
-                        <td>{inst.liner}</td>
-                        <td style={{ fontSize: "0.85rem" }}>{inst.location}</td>
-                        <td style={{ fontSize: "0.85rem" }}>
-                          {inst.truckDriver ? (
-                            <div title={`${inst.truckDriver.name} - ${inst.truckDriver.licensePlate}`}>
-                              🚛 {inst.truckDriver.name}
-                            </div>
-                          ) : inst.transportbedrijf ? (
-                            <span style={{ color: "#6b7280" }}>{inst.transportbedrijf}</span>
-                          ) : (
-                            <span style={{ color: "#9ca3af", fontStyle: "italic" }}>—</span>
-                          )}
-                        </td>
-                        <td style={{ fontWeight: 600, color: inst.weight ? "#059669" : "#9ca3af" }}>
-                          {inst.weight ? `${parseFloat(inst.weight).toLocaleString()} kg` : <span style={{ fontStyle: "italic" }}>—</span>}
-                        </td>
-                        <td style={{ fontSize: "0.85rem", color: "#6b7280" }}>
-                          {new Date(inst.lastUpdated).toLocaleString()}
-                        </td>
-                        <td>
-                          <div className="actions">
-                            <button
-                              className="btn btn-secondary btn-sm"
-                              onClick={() => setDetailId(inst.id)}
-                              title="View details"
-                            >
-                              Details
-                            </button>
-                            <button
-                              className="btn btn-secondary btn-sm"
-                              onClick={() => setUpdateStateInstance(inst)}
-                              title="Advance state"
-                            >
-                              Advance
-                            </button>
-                          </div>
-                        </td>
+          ) : (() => {
+            const cols = window.getTableColumns(instances);
+            return (
+              <div className="card" style={{ padding: "0" }}>
+                <div className="table-wrapper">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>State</th>
+                        {cols.map(col => <th key={col.key}>{col.label}</th>)}
+                        <th>Updated</th>
+                        <th>Actions</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
+                    </thead>
+                    <tbody>
+                      {instances.map((inst) => (
+                        <tr key={inst.id}>
+                          <td>
+                            <StateBadge state={inst.state} />
+                            <MiniProgress currentState={inst.state} />
+                          </td>
+                          {cols.map((col, i) => (
+                            <td key={col.key} style={i === 0 ? { fontWeight: 600 } : { fontSize: "0.85rem" }}>
+                              <ParamValue value={inst.parameters[col.key]} />
+                            </td>
+                          ))}
+                          <td style={{ fontSize: "0.85rem", color: "#6b7280" }}>
+                            {inst.updatedAt ? new Date(inst.updatedAt).toLocaleString() : "—"}
+                          </td>
+                          <td>
+                            <div className="actions">
+                              <button
+                                className="btn btn-secondary btn-sm"
+                                onClick={() => setDetailId(inst.id)}
+                                title="View details"
+                              >
+                                Details
+                              </button>
+                              <button
+                                className="btn btn-secondary btn-sm"
+                                onClick={() => setUpdateStateInstance(inst)}
+                                title="Advance state"
+                              >
+                                Advance
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               </div>
-            </div>
-          )}
+            );
+          })()}
 
           {/* ---- Modals ---- */}
           {showCreate && (

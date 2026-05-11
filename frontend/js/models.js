@@ -35,6 +35,140 @@ window.STATE_COLORS = {
   vgm_purchased: { bg: "#d1fae5", text: "#065f46", border: "#6ee7b7" }
 };
 
+// ── Real backend process state flows ─────────────────────────────────────────
+// Maps Flowable process definition key → ordered state sequence with display info
+window.BACKEND_STATE_FLOWS = {
+  shipperProcess: [
+    { key: 'STARTED',              label: 'Order Created',     color: { bg: '#f3f4f6', text: '#374151', border: '#d1d5db' } },
+    { key: 'ORDER_CONFIRMED',      label: 'Order Confirmed',   color: { bg: '#dbeafe', text: '#1e40af', border: '#93c5fd' } },
+    { key: 'TRUCKER_ANNOUNCED',    label: 'Truck Arrived',     color: { bg: '#fef3c7', text: '#92400e', border: '#fcd34d' } },
+    { key: 'MEASUREMENT_RECEIVED', label: 'Weight Measured',   color: { bg: '#ede9fe', text: '#5b21b6', border: '#c4b5fd' } },
+    { key: 'VGM_PURCHASED',        label: 'VGM Issued',        color: { bg: '#d1fae5', text: '#065f46', border: '#6ee7b7' } },
+  ],
+  certiweightVGMProcess: [
+    { key: 'STARTED',            label: 'Order Received',     color: { bg: '#f3f4f6', text: '#374151', border: '#d1d5db' } },
+    { key: 'TRUCKER_ANNOUNCED',  label: 'Truck Arrived',      color: { bg: '#fef3c7', text: '#92400e', border: '#fcd34d' } },
+    { key: 'PURCHASE_CONFIRMED', label: 'Purchase Confirmed', color: { bg: '#d1fae5', text: '#065f46', border: '#6ee7b7' } },
+  ],
+};
+
+// Returns the process flow for the configured serviceDefinitionUri, or null
+window.getProcessFlow = function() {
+  const def = window.AppConfig && window.AppConfig.serviceDefinitionUri;
+  return window.BACKEND_STATE_FLOWS[def] || null;
+};
+
+// Returns display info for any state key (backend or mock)
+window.getStateInfo = function(stateKey) {
+  const flow = window.getProcessFlow();
+  if (flow) {
+    const found = flow.find(function(s) { return s.key === stateKey; });
+    if (found) return { label: found.label, color: found.color };
+  }
+  if (window.STATE_LABELS[stateKey]) {
+    return {
+      label: window.STATE_LABELS[stateKey],
+      color: window.STATE_COLORS[stateKey] || { bg: '#e5e7eb', text: '#374151', border: '#9ca3af' }
+    };
+  }
+  return {
+    label: stateKey.replace(/_/g, ' '),
+    color: { bg: '#e5e7eb', text: '#374151', border: '#9ca3af' }
+  };
+};
+
+// ── Process Display Configuration ────────────────────────────────────────────
+// Per-process metadata display hints. The frontend uses these to decide which
+// parameters to show in the list, how to label them, and which are internal
+// implementation details that should be hidden.
+// Any process not listed here falls back to auto-formatting.
+window.PROCESS_DISPLAY_CONFIG = {
+  shipperProcess: {
+    listColumns: [
+      { key: 'containernr', label: 'Container' },
+      { key: 'bookingnr',   label: 'Booking' },
+      { key: 'liner',       label: 'Liner' },
+      { key: 'location',    label: 'Location' },
+      { key: 'grossMass',   label: 'Weight (kg)' },
+    ],
+    hiddenParameters: ['internalApiUrl', 'payloadData', 'certiweightInstanceId', 'containerNr'],
+    parameterLabels: {
+      containernr:      'Container Nr',
+      bookingnr:        'Booking Nr',
+      liner:            'Liner',
+      location:         'Location',
+      announcementDate: 'Announcement Date',
+      transportbedrijf: 'Transport Company',
+      customerReference:'Customer Reference',
+      grossMass:        'Gross Mass (kg)',
+      certificateRef:   'Certificate Ref',
+      certificateUrl:   'Certificate URL',
+    }
+  },
+  certiweightVGMProcess: {
+    listColumns: [
+      { key: 'containernr', label: 'Container' },
+      { key: 'bookingnr',   label: 'Booking' },
+      { key: 'liner',       label: 'Liner' },
+      { key: 'location',    label: 'Location' },
+    ],
+    hiddenParameters: ['internalApiUrl', 'payloadData'],
+    parameterLabels: {
+      containernr:      'Container Nr',
+      bookingnr:        'Booking Nr',
+      liner:            'Liner',
+      location:         'Location',
+      announcementDate: 'Announcement Date',
+      transportbedrijf: 'Transport Company',
+      customerReference:'Customer Reference',
+    },
+    stateTransitions: {
+      TRUCKER_ANNOUNCED: [
+        { key: 'transportbedrijf', label: 'Transport Company', type: 'text', placeholder: 'e.g. Van Moer Transport', required: true }
+      ]
+    }
+  }
+};
+
+// Returns display config for the active service definition, or {}
+window.getDisplayConfig = function() {
+  var def = window.AppConfig && window.AppConfig.serviceDefinitionUri;
+  return window.PROCESS_DISPLAY_CONFIG[def] || {};
+};
+
+// Returns list columns for the active process; falls back to first 4 param keys
+window.getTableColumns = function(instances) {
+  var config = window.getDisplayConfig();
+  if (config.listColumns && config.listColumns.length > 0) return config.listColumns;
+  if (instances && instances.length > 0) {
+    return Object.keys(instances[0].parameters || {}).slice(0, 4).map(function(k) {
+      return { key: k, label: window.getParameterLabel(k) };
+    });
+  }
+  return [];
+};
+
+// Human-readable label for a parameter key; auto-formats camelCase/snake_case
+window.getParameterLabel = function(key) {
+  var config = window.getDisplayConfig();
+  if (config.parameterLabels && config.parameterLabels[key]) return config.parameterLabels[key];
+  return key.replace(/([A-Z])/g, ' $1').replace(/_/g, ' ')
+            .replace(/^\w/, function(c) { return c.toUpperCase(); }).trim();
+};
+
+// True if a parameter key should be hidden in the detail view
+window.isHiddenParameter = function(key) {
+  var hidden = window.getDisplayConfig().hiddenParameters || [];
+  return hidden.indexOf(key) !== -1;
+};
+
+// Extra form fields to collect when advancing to a given state key
+// Returns array of { key, label, type, placeholder, required }
+window.getStateTransitionFields = function(stateKey) {
+  var transitions = window.getDisplayConfig().stateTransitions || {};
+  return transitions[stateKey] || [];
+};
+
 // ---- Seed Data ----
 
 window.SEED_OFFERINGS = [
