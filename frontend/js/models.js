@@ -39,16 +39,18 @@ window.STATE_COLORS = {
 // Maps Flowable process definition key → ordered state sequence with display info
 window.BACKEND_STATE_FLOWS = {
   shipperProcess: [
-    { key: 'STARTED',              label: 'Order Created',     color: { bg: '#f3f4f6', text: '#374151', border: '#d1d5db' } },
-    { key: 'ORDER_CONFIRMED',      label: 'Order Confirmed',   color: { bg: '#dbeafe', text: '#1e40af', border: '#93c5fd' } },
-    { key: 'TRUCKER_ANNOUNCED',    label: 'Truck Arrived',     color: { bg: '#fef3c7', text: '#92400e', border: '#fcd34d' } },
-    { key: 'MEASUREMENT_RECEIVED', label: 'Weight Measured',   color: { bg: '#ede9fe', text: '#5b21b6', border: '#c4b5fd' } },
-    { key: 'VGM_PURCHASED',        label: 'VGM Issued',        color: { bg: '#d1fae5', text: '#065f46', border: '#6ee7b7' } },
+    { key: 'STARTED',              label: 'Order Created',     bpmnActivityId: 'waitOrderCreated',       color: { bg: '#f3f4f6', text: '#374151', border: '#d1d5db' } },
+    { key: 'ORDER_CONFIRMED',      label: 'Order Confirmed',   bpmnActivityId: 'waitTruckerAnnounced',   color: { bg: '#dbeafe', text: '#1e40af', border: '#93c5fd' } },
+    { key: 'TRUCKER_ANNOUNCED',    label: 'Truck Arrived',     bpmnActivityId: 'waitMeasurementCreated', color: { bg: '#fef3c7', text: '#92400e', border: '#fcd34d' } },
+    { key: 'MEASUREMENT_RECEIVED', label: 'Weight Measured',   bpmnActivityId: 'waitVGMPurchased',       color: { bg: '#ede9fe', text: '#5b21b6', border: '#c4b5fd' } },
+    { key: 'VGM_PURCHASED',        label: 'VGM Issued',        bpmnActivityId: 'endEvent',               color: { bg: '#d1fae5', text: '#065f46', border: '#6ee7b7' } },
   ],
   certiweightVGMProcess: [
-    { key: 'STARTED',            label: 'Order Received',     color: { bg: '#f3f4f6', text: '#374151', border: '#d1d5db' } },
-    { key: 'TRUCKER_ANNOUNCED',  label: 'Truck Arrived',      color: { bg: '#fef3c7', text: '#92400e', border: '#fcd34d' } },
-    { key: 'PURCHASE_CONFIRMED', label: 'Purchase Confirmed', color: { bg: '#d1fae5', text: '#065f46', border: '#6ee7b7' } },
+    { key: 'STARTED',             label: 'Job Created',       bpmnActivityId: 'waitToSendOrder',       color: { bg: '#f3f4f6', text: '#374151', border: '#d1d5db' } },
+    { key: 'ORDER_CREATED',       label: 'Order Sent',        bpmnActivityId: 'waitToSendTrucker',     color: { bg: '#dbeafe', text: '#1e40af', border: '#93c5fd' } },
+    { key: 'TRUCKER_ANNOUNCED',   label: 'Trucker Sent',      bpmnActivityId: 'waitToSendMeasurement', color: { bg: '#fef3c7', text: '#92400e', border: '#fcd34d' } },
+    { key: 'MEASUREMENT_CREATED', label: 'Awaiting Purchase', bpmnActivityId: 'waitPurchaseVGM',       color: { bg: '#ede9fe', text: '#5b21b6', border: '#c4b5fd' } },
+    { key: 'PURCHASE_CONFIRMED',  label: 'VGM Issued',        bpmnActivityId: 'endEvent',              color: { bg: '#d1fae5', text: '#065f46', border: '#6ee7b7' } },
   ],
 };
 
@@ -112,7 +114,7 @@ window.PROCESS_DISPLAY_CONFIG = {
       { key: 'liner',       label: 'Liner' },
       { key: 'location',    label: 'Location' },
     ],
-    hiddenParameters: ['internalApiUrl', 'payloadData'],
+    hiddenParameters: ['internalApiUrl', 'payloadData', 'truckerApiUrl', 'truckerPayload', 'measurementApiUrl', 'measurementPayload'],
     parameterLabels: {
       containernr:      'Container Nr',
       bookingnr:        'Booking Nr',
@@ -122,11 +124,6 @@ window.PROCESS_DISPLAY_CONFIG = {
       transportbedrijf: 'Transport Company',
       customerReference:'Customer Reference',
     },
-    stateTransitions: {
-      TRUCKER_ANNOUNCED: [
-        { key: 'transportbedrijf', label: 'Transport Company', type: 'text', placeholder: 'e.g. Van Moer Transport', required: true }
-      ]
-    }
   }
 };
 

@@ -4,7 +4,12 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Container Weighing Control Center App</title>
+  <!-- bpmn-js viewer -->
+  <link rel="stylesheet" href="https://unpkg.com/bpmn-js@17/dist/assets/diagram-js.css">
+  <link rel="stylesheet" href="https://unpkg.com/bpmn-js@17/dist/assets/bpmn-font/css/bpmn-embedded.css">
+  <!-- App styles — loaded after bpmn-js so our rules take precedence -->
   <link rel="stylesheet" href="css/styles.css" />
+  <script src="https://unpkg.com/bpmn-js@17/dist/bpmn-navigated-viewer.development.js"></script>
   <!-- React from CDN (no build step required) -->
   <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
@@ -28,7 +33,7 @@
        React Components (JSX, processed by Babel standalone)
        ============================================================ -->
   <script type="text/babel">
-    const { useState, useEffect, useCallback } = React;
+    const { useState, useEffect, useCallback, useRef } = React;
 
     // ────────────────────────────────────────────────────────────
     // Shared Components
@@ -119,10 +124,10 @@
     // Modal Wrapper
     // ────────────────────────────────────────────────────────────
 
-    function Modal({ title, onClose, children, footer }) {
+    function Modal({ title, onClose, children, footer, maxWidth }) {
       return (
         <div className="modal-overlay" onClick={onClose}>
-          <div className="modal" onClick={(e) => e.stopPropagation()}>
+          <div className="modal" style={maxWidth ? { maxWidth } : undefined} onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
               <h2>{title}</h2>
               <button className="modal-close" onClick={onClose}>&times;</button>
@@ -356,7 +361,7 @@
         }
         setSubmitting(true);
         try {
-          await window.API.createInstance(offeringId, {
+          const newInstance = await window.API.createInstance(offeringId, {
             containernr: containernr.trim(),
             bookingnr: bookingnr.trim(),
             liner: liner.trim(),
@@ -368,7 +373,7 @@
             shipperAddress: "Havenstraat 123, 2030 Antwerp, Belgium"
           });
           showToast("Order created successfully!", "success");
-          onCreated();
+          onCreated(newInstance && newInstance.id);
         } catch (err) {
           showToast("Failed to create order: " + err.message, "error");
         }
@@ -465,6 +470,139 @@
     // Instance Detail Modal
     // ────────────────────────────────────────────────────────────
 
+    // ── BPMN overlay-based highlight helpers ─────────────────────────────────
+    // Uses bpmn-js's overlays API to draw an HTML div on top of the element.
+    // This avoids all SVG / CSS specificity issues with the viewer's own styles.
+
+    function bpmnApplyHighlight(viewer, elementId) {
+      try {
+        const reg = viewer.get('elementRegistry');
+        const element = reg.get(elementId);
+        if (!element) {
+          console.warn('BPMN highlight: element not found in registry:', elementId);
+          return;
+        }
+        const isEvent = element.type && element.type.toLowerCase().includes('event');
+        const pad = isEvent ? 9 : 5;
+        const radius = isEvent ? '50%' : '8px';
+        viewer.get('overlays').add(elementId, 'bpmn-active-overlay', {
+          position: { top: -pad, left: -pad },
+          html: `<div class="bpmn-overlay-highlight" style="width:${element.width + pad * 2}px;height:${element.height + pad * 2}px;border-radius:${radius};"></div>`
+        });
+      } catch (e) {
+        console.error('BPMN highlight error:', e);
+      }
+    }
+
+    function bpmnRemoveHighlight(viewer) {
+      try {
+        viewer.get('overlays').remove({ type: 'bpmn-active-overlay' });
+      } catch (e) {}
+    }
+
+    // Global BPMN XML cache — keyed by processKey.
+    // Populated proactively so the viewer opens instantly on first use.
+    const _bpmnXmlCache = {};
+
+    async function fetchBpmnXml(processKey) {
+      if (_bpmnXmlCache[processKey]) return _bpmnXmlCache[processKey];
+      const apiBase = window.AppConfig && window.AppConfig.apiBaseUrl;
+      if (!apiBase) return null;
+      try {
+        const deploymentsResp = await fetch(`${apiBase}/admin/deployments`);
+        const deployments = await deploymentsResp.json();
+        const versions = deployments[processKey];
+        if (!versions || versions.length === 0) return null;
+        const latest = versions[versions.length - 1];
+        const bpmnResp = await fetch(`${apiBase}${latest.bpmnUrl}`);
+        const xml = await bpmnResp.text();
+        _bpmnXmlCache[processKey] = xml;
+        return xml;
+      } catch (e) {
+        return null;
+      }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+
+    function InstanceBpmnViewer({ instance }) {
+      const containerRef = useRef(null);
+      const viewerRef = useRef(null);
+      const [bpmnReady, setBpmnReady] = useState(false);
+      const processKey = String(instance.serviceDefinition || '');
+
+      // Load BPMN once (or when processKey changes). Uses the global XML cache
+      // so the viewer is ready immediately if the XML was preloaded earlier.
+      useEffect(() => {
+        setBpmnReady(false);
+        let cancelled = false;
+
+        (async () => {
+          try {
+            const xml = await fetchBpmnXml(processKey);
+            if (!xml || cancelled || !containerRef.current) return;
+
+            if (!viewerRef.current) {
+              viewerRef.current = new BpmnJS({ container: containerRef.current });
+            }
+            await viewerRef.current.importXML(xml);
+            viewerRef.current.get('canvas').zoom('fit-viewport');
+            if (!cancelled) requestAnimationFrame(() => {
+              if (!cancelled) setBpmnReady(true);
+            });
+          } catch (err) {
+            console.error('BPMN load error:', err);
+          }
+        })();
+
+        return () => {
+          cancelled = true;
+          if (viewerRef.current) { viewerRef.current.destroy(); viewerRef.current = null; }
+        };
+      }, [processKey]);
+
+      // Apply / move highlight whenever state or readiness changes.
+      // Queries Flowable for the actual current activity (always accurate), with
+      // a fallback to the state→bpmnActivityId map for completed processes.
+      useEffect(() => {
+        if (!bpmnReady || !viewerRef.current) return;
+        bpmnRemoveHighlight(viewerRef.current);
+        const viewer = viewerRef.current;
+
+        const apiBase = window.AppConfig && window.AppConfig.apiBaseUrl;
+        fetch(`${apiBase}/serviceInstances/${instance.id}/currentActivities`)
+          .then(r => r.ok ? r.json() : Promise.reject())
+          .then(data => {
+            const activities = data.activities || [];
+            if (activities.length > 0) {
+              activities.forEach(id => bpmnApplyHighlight(viewer, id));
+            } else {
+              // Process completed — fall back to state map (e.g. endEvent)
+              const flow = window.BACKEND_STATE_FLOWS[processKey];
+              const step = flow && flow.find(s => s.key === instance.state);
+              if (step && step.bpmnActivityId) bpmnApplyHighlight(viewer, step.bpmnActivityId);
+            }
+          })
+          .catch(() => {
+            const flow = window.BACKEND_STATE_FLOWS[processKey];
+            const step = flow && flow.find(s => s.key === instance.state);
+            if (step && step.bpmnActivityId) bpmnApplyHighlight(viewer, step.bpmnActivityId);
+          });
+      }, [instance.state, instance.id, bpmnReady, processKey]);
+
+      return (
+        <div ref={containerRef} style={{
+          height: '340px',
+          border: '1px solid #e5e7eb',
+          borderRadius: '8px',
+          overflow: 'hidden',
+          background: '#fafafa',
+          marginTop: '0.75rem',
+          marginBottom: '0.25rem',
+        }} />
+      );
+    }
+
     function InstanceDetailModal({ instanceId, onClose, onUpdated, showToast }) {
       const [instance, setInstance] = useState(null);
       const [loading, setLoading] = useState(true);
@@ -556,9 +694,9 @@
         .filter(([k]) => !window.isHiddenParameter(k));
 
       return (
-        <Modal title={modalTitle} onClose={onClose}>
-          {/* State progress */}
-          <StateProgress currentState={instance.state} />
+        <Modal title={modalTitle} onClose={onClose} maxWidth="960px">
+          {/* BPMN process diagram with current state highlighted */}
+          <InstanceBpmnViewer instance={instance} />
 
           {/* JSON-LD context badge */}
           <div style={{ marginTop: "1rem", padding: "0.5rem", background: "#f0f9ff", border: "1px solid #bae6fd", borderRadius: "4px", fontSize: "0.75rem", color: "#0369a1" }}>
@@ -829,6 +967,13 @@
 
       useEffect(() => { loadInstances(); }, [loadInstances]);
 
+      // Preload the BPMN XML as soon as the list page renders so the BPMN viewer
+      // opens instantly (without HTTP round-trips) when a detail modal is opened.
+      useEffect(() => {
+        const processKey = window.AppConfig && window.AppConfig.serviceDefinitionUri;
+        if (processKey) fetchBpmnXml(processKey);
+      }, []);
+
       // Auto-refresh every 5 seconds while the page is open
       useEffect(() => {
         const id = setInterval(silentRefresh, 5000);
@@ -927,7 +1072,7 @@
             <CreateInstanceModal
               offeringId={offering.id}
               onClose={() => setShowCreate(false)}
-              onCreated={() => { setShowCreate(false); handleRefresh(); }}
+              onCreated={(newId) => { setShowCreate(false); handleRefresh(); if (newId) setDetailId(newId); }}
               showToast={showToast}
             />
           )}
@@ -1091,6 +1236,149 @@
     }
 
     // ────────────────────────────────────────────────────────────
+    // BPMN Admin Page
+    // ────────────────────────────────────────────────────────────
+
+    function BpmnAdminPage({ showToast }) {
+      const [deployments, setDeployments] = useState({});
+      const [selectedKey, setSelectedKey] = useState(null);
+      const [selectedDef, setSelectedDef] = useState(null);
+      const [uploading, setUploading] = useState(false);
+      const [loading, setLoading] = useState(true);
+      const containerRef = useRef(null);
+      const viewerRef = useRef(null);
+      const fileInputRef = useRef(null);
+
+      const loadDeployments = useCallback(async (autoSelectKey) => {
+        try {
+          const resp = await fetch(`${window.AppConfig.apiBaseUrl}/admin/deployments`);
+          const data = await resp.json();
+          setDeployments(data);
+          const keys = Object.keys(data);
+          if (keys.length > 0) {
+            const key = autoSelectKey && data[autoSelectKey] ? autoSelectKey : keys[0];
+            setSelectedKey(key);
+            const versions = data[key];
+            setSelectedDef(versions[versions.length - 1]);
+          }
+        } catch (err) {
+          showToast("Failed to load deployments", "error");
+        }
+        setLoading(false);
+      }, [showToast]);
+
+      useEffect(() => { loadDeployments(null); }, [loadDeployments]);
+
+      // Render BPMN whenever the selected definition changes
+      useEffect(() => {
+        if (!selectedDef || !containerRef.current) return;
+        (async () => {
+          try {
+            const resp = await fetch(`${window.AppConfig.apiBaseUrl}${selectedDef.bpmnUrl}`);
+            const xml = await resp.text();
+            if (!viewerRef.current) {
+              viewerRef.current = new BpmnJS({ container: containerRef.current });
+            }
+            const { warnings } = await viewerRef.current.importXML(xml);
+            if (warnings.length) console.warn("BPMN import warnings:", warnings);
+            viewerRef.current.get("canvas").zoom("fit-viewport");
+          } catch (err) {
+            console.error("BPMN render error:", err);
+            showToast(`BPMN error: ${err.message}`, "error");
+          }
+        })();
+      }, [selectedDef]);
+
+      // Destroy viewer on unmount
+      useEffect(() => {
+        return () => {
+          if (viewerRef.current) { viewerRef.current.destroy(); viewerRef.current = null; }
+        };
+      }, []);
+
+      const handleKeyChange = (key) => {
+        setSelectedKey(key);
+        const versions = deployments[key] || [];
+        setSelectedDef(versions[versions.length - 1]);
+      };
+
+      const handleUpload = async (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        e.target.value = "";
+        setUploading(true);
+        const form = new FormData();
+        form.append("file", file);
+        try {
+          const resp = await fetch(`${window.AppConfig.apiBaseUrl}/admin/deploy`, { method: "POST", body: form });
+          if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+          const data = await resp.json();
+          showToast(`Deployed: ${data.processes.map(p => `${p.key} v${p.version}`).join(", ")}`, "success");
+          await loadDeployments(data.processes[0]?.key);
+        } catch (err) {
+          showToast(err.message, "error");
+        }
+        setUploading(false);
+      };
+
+      if (loading) return <div className="container"><Loading /></div>;
+
+      const keys = Object.keys(deployments);
+      const versions = selectedKey ? (deployments[selectedKey] || []) : [];
+
+      return (
+        <div className="container" style={{ paddingTop: "1.5rem" }}>
+          {/* Toolbar */}
+          <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", marginBottom: "1rem", flexWrap: "wrap" }}>
+            {/* Process key tabs */}
+            <div style={{ display: "flex", gap: "0.4rem" }}>
+              {keys.map(key => (
+                <button key={key} onClick={() => handleKeyChange(key)}
+                  className={selectedKey === key ? "btn btn-primary btn-sm" : "btn btn-sm"}>
+                  {key}
+                </button>
+              ))}
+            </div>
+
+            {/* Version selector */}
+            {versions.length > 0 && (
+              <select
+                value={selectedDef?.processDefinitionId || ""}
+                onChange={e => setSelectedDef(versions.find(v => v.processDefinitionId === e.target.value))}
+                style={{ fontSize: "0.875rem", padding: "0.3rem 0.6rem", borderRadius: "6px", border: "1px solid #d1d5db" }}>
+                {[...versions].reverse().map(v => (
+                  <option key={v.processDefinitionId} value={v.processDefinitionId}>
+                    v{v.version}{v.processDefinitionId === versions[versions.length - 1].processDefinitionId ? " (active)" : ""}
+                  </option>
+                ))}
+              </select>
+            )}
+
+            {/* Refresh + Upload */}
+            <div style={{ marginLeft: "auto", display: "flex", gap: "0.5rem" }}>
+              <button className="btn btn-sm" onClick={() => loadDeployments(selectedKey)} title="Reload deployment list">
+                ↺ Refresh
+              </button>
+              <input ref={fileInputRef} type="file" accept=".xml,.bpmn" style={{ display: "none" }} onChange={handleUpload} />
+              <button className="btn btn-primary btn-sm" onClick={() => fileInputRef.current.click()} disabled={uploading}>
+                {uploading ? "Deploying…" : "↑ Deploy new version"}
+              </button>
+            </div>
+          </div>
+
+          {/* BPMN Canvas */}
+          <div ref={containerRef} style={{
+            height: "600px",
+            border: "1px solid #e5e7eb",
+            borderRadius: "8px",
+            backgroundColor: "#f9fafb",
+            overflow: "hidden"
+          }} />
+        </div>
+      );
+    }
+
+    // ────────────────────────────────────────────────────────────
     // App Root
     // ────────────────────────────────────────────────────────────
 
@@ -1139,8 +1427,27 @@
               <div style={{ border: "1px solid rgba(255,255,255,0.3)", padding: "0.5rem 1rem", borderRadius: "6px", fontSize: "0.9rem", fontWeight: 500 }}>
                 Client: Van Moer
               </div>
+              {/* Processes Button */}
+              <button
+                onClick={() => setNav({ page: "bpmn" })}
+                style={{
+                  padding: "0.5rem 1rem",
+                  borderRadius: "6px",
+                  border: "1px solid rgba(255,255,255,0.3)",
+                  backgroundColor: nav.page === "bpmn" ? "rgba(255,255,255,0.25)" : "rgba(255,255,255,0.1)",
+                  color: "white",
+                  cursor: "pointer",
+                  fontSize: "0.9rem",
+                  fontWeight: 500,
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "0.5rem"
+                }}
+              >
+                ⚙ Processes
+              </button>
               {/* Settings Button */}
-              <button 
+              <button
                 onClick={() => setShowSettings(true)}
                 style={{
                   padding: "0.5rem 1rem",
@@ -1173,6 +1480,12 @@
                 <span>{nav.offering.name}</span>
               </>
             )}
+            {nav.page === "bpmn" && (
+              <>
+                <span className="sep">/</span>
+                <span>Process Definitions</span>
+              </>
+            )}
           </div>
 
           {/* Page Content */}
@@ -1187,6 +1500,9 @@
               onBack={() => setNav({ page: "offerings" })}
               showToast={showToast}
             />
+          )}
+          {nav.page === "bpmn" && (
+            <BpmnAdminPage showToast={showToast} />
           )}
 
           {/* Toast Notification */}

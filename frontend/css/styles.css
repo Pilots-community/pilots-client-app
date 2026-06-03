@@ -445,6 +445,21 @@ tbody tr:hover {
   to { transform: rotate(360deg); }
 }
 
+/* ---- BPMN instance viewer ---- */
+@keyframes bpmn-overlay-pulse {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.45; }
+}
+
+.bpmn-overlay-highlight {
+  border: 3px solid #1d4ed8;
+  background: rgba(219, 234, 254, 0.4);
+  pointer-events: none;
+  box-sizing: border-box;
+  animation: bpmn-overlay-pulse 1.4s ease-in-out infinite;
+}
+
+
 /* ---- Responsive ---- */
 @media (max-width: 768px) {
   .container { padding: 1rem; }
